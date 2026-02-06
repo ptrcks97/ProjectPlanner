@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # ProjektPlanner
 
 Leichtgewichtige Planungs-App auf Basis von json-server und Vanilla JS. Du kannst Projekte anlegen, Phasen und Arbeitspakete planen, Kapazitäten hinterlegen, automatisch Zeitpläne berechnen, Kanban & Charts nutzen und Arbeitsjournale führen. Exporte: CSV/MD/PDF sowie mehrseitiger PDF-Export aller Diagramme.
@@ -49,4 +48,3 @@ Standard-Port: http://localhost:3000 (änderbar via `PORT`, `DB_FILE`, `STATIC_D
 =======
 # ProjectPlanner
 A lightweight project planner (vanilla JS + json‑server) where you create projects, define phases and work packages, auto-schedule them with weekly capacities, and manage/visualize progress via tables, charts, kanban, and exports (CSV/MD/PDF, multi-chart PDF). It also includes a per-project work journal stored locally with quick exports.
->>>>>>> 604f83b06ffd0f45aa4d1347150fd2bc5f6154c8
