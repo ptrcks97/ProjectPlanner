@@ -1,0 +1,11 @@
+{
+  "name": "projektplanner",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "json-server --watch ${DB_FILE:-db.json} --host 0.0.0.0 --port ${PORT:-3000} --static ${STATIC_DIR:-.}"
+  },
+  "devDependencies": {
+    "json-server": "^0.17.4"
+  }
+}

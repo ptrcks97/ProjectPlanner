@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    command: npm run dev
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - NODE_ENV=development
+      - CHOKIDAR_USEPOLLING=1
+      - PORT=${PORT}
+      - DB_FILE=${DB_FILE}
+      - STATIC_DIR=${STATIC_DIR}
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    restart: unless-stopped
+
+volumes:
+  node_modules:

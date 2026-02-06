@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProjektPlanner</title>
+  <script src="theme-loader.js"></script>
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/base.css">
+  <link rel="stylesheet" href="themes.css">
+  <link rel="stylesheet" href="assets/css/index.css">
+</head>
+<body class="home">
+  <div class="shell">
+    <header>
+      <div>
+        <h1>Projekt hinzufügen</h1>
+        <p class="hint">Plan your project now!</code></p>
+      </div>
+    </header>
+
+      <form id="project-form">
+        <label>
+          Name
+          <input id="project-name" name="name" type="text" maxlength="120" placeholder="Project X" required>
+        </label>
+        <label>
+          Zeitschätzung (Stunden)
+          <input id="project-hours" name="hours" type="number" min="0" step="0.5" placeholder="8" required>
+        </label>
+        <button type="submit">Projekt speichern</button>
+      </form>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Stunden</th>
+            <th>ID</th>
+            <th>Aktion</th>
+          </tr>
+        </thead>
+        <tbody id="project-rows">
+          <tr><td colspan="4">Lade Projekte...</td></tr>
+        </tbody>
+      </table>
+
+      <div id="status" class="status">Bereit.</div>
+  </div>
+
+  <script type="module" src="assets/js/index.js"></script>
+</body>
+</html>

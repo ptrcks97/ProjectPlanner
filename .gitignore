@@ -1,0 +1,20 @@
+node_modules
+npm-debug.log*
+.DS_Store
+
+# Environments
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Datenbank / Lokale Daten
+db.json
+
+# Debug & Testing
+coverage
+*.log
+
+# Docker
+docker-compose.override.yml

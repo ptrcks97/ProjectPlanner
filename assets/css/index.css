@@ -1,0 +1,37 @@
+/* index.css (LIGHT / fresh / modern) */
+body.home {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body.home .shell {
+  max-width: 1040px;
+  padding: 28px 28px 32px;
+}
+
+body.home form {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+body.home button[type="submit"] {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.home-table {
+  margin-top: 10px;
+}
+
+.home-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}

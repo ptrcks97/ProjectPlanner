@@ -1,0 +1,105 @@
+/* Theme overrides - applied via [data-theme] on <html> */
+
+:root[data-theme="Fancy_Dark"] {
+  --bg: #0b1020;
+  --bg-2: #0f172a;
+  --card: rgba(18, 24, 42, 0.82);
+  --card-strong: rgba(23, 31, 52, 0.92);
+  --text: #e9eefb;
+  --muted: #9fb2d0;
+  --accent: #8b5cf6;
+  --accent-strong: #22d3ee;
+  --accent-soft: rgba(139, 92, 246, 0.16);
+  --danger: #f87171;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.14);
+  --ring: 0 0 0 4px rgba(139, 92, 246, 0.28);
+  --shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+  --shadow-soft: 0 12px 38px rgba(0, 0, 0, 0.32);
+}
+
+:root[data-theme="Senfgelb_Black"] {
+  --bg: #0e0c06;
+  --bg-2: #171107;
+  --card: rgba(26, 22, 14, 0.82);
+  --card-strong: rgba(32, 27, 16, 0.92);
+  --text: #f7e9bf;
+  --muted: #c9b472;
+  --accent: #e0b400;
+  --accent-strong: #f59e0b;
+  --accent-soft: rgba(224, 180, 0, 0.16);
+  --danger: #fb7185;
+  --border: rgba(247, 233, 191, 0.10);
+  --border-2: rgba(247, 233, 191, 0.16);
+  --ring: 0 0 0 4px rgba(224, 180, 0, 0.28);
+  --shadow: 0 22px 70px rgba(0, 0, 0, 0.45);
+  --shadow-soft: 0 12px 38px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme="Ocean_Thunder"] {
+  --bg: #0f2738;
+  --bg-2: #15354a;
+  --card: rgba(23, 49, 68, 0.82);
+  --card-strong: rgba(27, 57, 79, 0.92);
+  --text: #e7f5ff;
+  --muted: #9ec1d9;
+  --accent: #0ea5e9;
+  --accent-strong: #22c55e;
+  --accent-soft: rgba(14, 165, 233, 0.16);
+  --danger: #f472b6;
+  --border: rgba(231, 245, 255, 0.12);
+  --border-2: rgba(231, 245, 255, 0.18);
+  --ring: 0 0 0 4px rgba(14, 165, 233, 0.26);
+  --shadow: 0 22px 70px rgba(12, 24, 36, 0.40);
+  --shadow-soft: 0 12px 38px rgba(12, 24, 36, 0.28);
+}
+
+/* Layout helpers to keep header and main content aligned and prevent horizontal overflow */
+.dashboard-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  width: 100%;
+  max-width: 100vw;
+}
+
+.dashboard-header {
+  width: 100%;
+}
+
+.dashboard-body {
+  display: flex;
+  width: 100vw;
+  max-width: 100%;
+}
+
+.dashboard-sidebar {
+  flex: 0 0 280px;
+  max-width: 280px;
+  min-width: 220px;
+  width: 100%;
+  overflow: auto;
+}
+
+.dashboard-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* critical to prevent overflow from wide children */
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.dashboard-chart-shell {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto; /* horizontal scroll for wide charts */
+  overflow-y: hidden;
+}
+
+.dashboard-chart {
+  min-width: 960px; /* adjust to your chart's natural width */
+  width: max-content;
+}
