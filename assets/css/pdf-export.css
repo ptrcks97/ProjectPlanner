@@ -1,0 +1,125 @@
+/* pdf-export.css -- ONLY applies when html[data-export="pdf"] is set */
+
+@media print {
+  /* keep default print sizing if browser print is used */
+}
+
+:root[data-export="pdf"] {
+  --pdf-bg: #f5f7fb;
+  --pdf-surface: #ffffff;
+  --pdf-surface-strong: #f0f4ff;
+  --pdf-border: #d4d8e5;
+  --pdf-text: #0f172a;
+  --pdf-muted: #6b7280;
+  --pdf-accent: #2563eb;
+  --pdf-shadow: 0 10px 32px rgba(15, 23, 42, 0.16);
+  --pdf-radius: 16px;
+}
+
+html[data-export="pdf"] body {
+  font-family: 'Inter', 'Space Grotesk', 'Helvetica Neue', Arial, sans-serif;
+  background: radial-gradient(circle at 20% 20%, #eef2ff, #f8fafc 45%, #eef2ff 85%);
+  color: var(--pdf-text);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Shell backdrop stays same size; only color/shadow updates */
+html[data-export="pdf"] .shell {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Cards / surfaces */
+html[data-export="pdf"] .card,
+html[data-export="pdf"] .table-card,
+html[data-export="pdf"] .panel,
+html[data-export="pdf"] .main,
+html[data-export="pdf"] .sidebar,
+html[data-export="pdf"] .chart-box,
+html[data-export="pdf"] .bar-wrap,
+html[data-export="pdf"] .kanban-board,
+html[data-export="pdf"] .table-wrap {
+  background: var(--pdf-surface);
+  border: 1px solid var(--pdf-border);
+  border-radius: var(--pdf-radius);
+  box-shadow: var(--pdf-shadow);
+}
+
+/* Keep layout unchanged: no padding/margin adjustments here */
+
+/* Headers & typography */
+html[data-export="pdf"] h1,
+html[data-export="pdf"] h2,
+html[data-export="pdf"] h3,
+html[data-export="pdf"] h4 {
+  color: var(--pdf-text);
+  letter-spacing: 0.01em;
+}
+html[data-export="pdf"] .muted,
+html[data-export="pdf"] .status,
+html[data-export="pdf"] .legend-row .muted,
+html[data-export="pdf"] .line-legend,
+html[data-export="pdf"] .download-wrap,
+html[data-export="pdf"] .summary,
+html[data-export="pdf"] .chip,
+html[data-export="pdf"] .hint {
+  color: var(--pdf-muted) !important;
+}
+
+/* Tables */
+html[data-export="pdf"] table {
+  border-collapse: collapse;
+  background: transparent;
+}
+html[data-export="pdf"] thead th {
+  background: var(--pdf-surface-strong);
+  color: var(--pdf-text);
+  border-bottom: 1px solid var(--pdf-border);
+}
+html[data-export="pdf"] tbody tr:nth-child(odd) {
+  background: rgba(37, 99, 235, 0.03);
+}
+html[data-export="pdf"] th,
+html[data-export="pdf"] td {
+  border: 1px solid var(--pdf-border);
+}
+
+/* Buttons look softer but size unchanged */
+html[data-export="pdf"] button,
+html[data-export="pdf"] .ghost,
+html[data-export="pdf"] .nav-pill,
+html[data-export="pdf"] .nav-btn,
+html[data-export="pdf"] .icon-btn,
+html[data-export="pdf"] .icon-square {
+  background: linear-gradient(145deg, #ffffff, #f3f6ff);
+  border-color: var(--pdf-border);
+  color: var(--pdf-text);
+  box-shadow: 0 6px 18px rgba(15,23,42,0.12);
+}
+
+/* Status highlight cards (e.g., health values) */
+html[data-export="pdf"] .health-value {
+  background: #ffffff;
+  border-color: rgba(37,99,235,0.28);
+  box-shadow: 0 12px 28px rgba(15,23,42,0.12);
+}
+html[data-export="pdf"] .health-value.ok { background: #f0fdf4; border-color: rgba(34,197,94,0.42); }
+html[data-export="pdf"] .health-value.warn { background: #fef2f2; border-color: rgba(239,68,68,0.42); }
+
+/* Avoid awkward page breaks in print/PDF captures */
+html[data-export="pdf"] .card,
+html[data-export="pdf"] .table-card,
+html[data-export="pdf"] .panel,
+html[data-export="pdf"] table,
+html[data-export="pdf"] .gantt,
+html[data-export="pdf"] .kanban-board,
+html[data-export="pdf"] .chart-box,
+html[data-export="pdf"] .bar-wrap {
+  page-break-inside: avoid;
+}
+
+/* Optional: clearer line legend chips */
+html[data-export="pdf"] .line-chip { height: 6px; border-radius: 3px; }
+
+/* Keep charts untouched: no styles on canvas/svg */
