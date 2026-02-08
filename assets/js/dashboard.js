@@ -1424,6 +1424,34 @@ const params = new URLSearchParams(window.location.search);
             <div class="legend">${legend}</div>
           </div>
         `;
+        // html2canvas rendert conic-gradient nicht zuverlässig; bei PDF-Export auf Canvas-Snapshot ausweichen
+        if (document.documentElement.dataset.export === 'pdf') {
+          const pieEl = chartContainer.querySelector('.pie');
+          if (pieEl) {
+            const size = (pieEl.offsetWidth || 220) * 2; // höhere Auflösung fürs PDF
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = size;
+            const ctx = canvas.getContext('2d');
+            let angle = -Math.PI / 2;
+            items.forEach(it => {
+              const slice = (it.value / totalHours) * Math.PI * 2;
+              ctx.beginPath();
+              ctx.moveTo(size/2, size/2);
+              ctx.fillStyle = it.color;
+              ctx.arc(size/2, size/2, size/2 - 6, angle, angle + slice);
+              ctx.closePath();
+              ctx.fill();
+              angle += slice;
+            });
+            ctx.strokeStyle = 'rgba(15,23,42,0.10)';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(size/2, size/2, size/2 - 4, 0, Math.PI * 2);
+            ctx.stroke();
+            const dataUrl = canvas.toDataURL('image/png');
+            pieEl.style.background = `url(${dataUrl}) center/contain no-repeat`;
+          }
+        }
       } else if (type === 'bar') {
         const max = Math.max(...items.map(i => i.value));
         const bars = items.map(it => `
@@ -1641,6 +1669,9 @@ async function exportChartAsPng() {
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
   try {
+    document.documentElement.setAttribute('data-export', 'pdf');
+    await document.fonts?.ready;
+
     const { jsPDF } = window.jspdf || {};
     if (!jsPDF) throw new Error('jsPDF nicht geladen');
 
@@ -1658,6 +1689,67 @@ async function exportChartAsPng() {
     const maxW = pageWidth - margin * 2;
     const maxH = footerY - yStart - footerGap;
     const projectTitle = title?.textContent || 'Projekt';
+
+    // Preload logo for title page
+    let logoData = null;
+    try {
+      const res = await fetch('assets/logo/logo.png');
+      if (res.ok) {
+        const blob = await res.blob();
+        logoData = await blobToDataUrl(blob);
+      }
+    } catch (e) { /* logo optional */ }
+
+    // Title page (clean cover)
+    pdf.setFillColor(241, 245, 255); // soft background
+    pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+
+    // subtle accent band
+    pdf.setFillColor(225, 234, 255);
+    pdf.rect(0, pageHeight * 0.18, pageWidth, pageHeight * 0.12, 'F');
+
+    // cover card
+    const cardW = Math.min(620, pageWidth - margin * 2);
+    const cardH = 260;
+    const cardX = (pageWidth - cardW) / 2;
+    const cardY = (pageHeight - cardH) / 2;
+    pdf.setFillColor(255, 255, 255);
+    pdf.setDrawColor(215, 223, 245);
+    pdf.roundedRect(cardX, cardY, cardW, cardH, 14, 14, 'FD');
+
+    // logo
+    if (logoData) {
+      const img = new Image();
+      img.src = logoData;
+      await new Promise((res) => { img.onload = res; });
+      const maxLogoW = 220;
+      const maxLogoH = 120;
+      const ratio = Math.min(maxLogoW / img.width, maxLogoH / img.height, 1);
+      const w = img.width * ratio;
+      const h = img.height * ratio;
+      const x = cardX + (cardW - w) / 2;
+      const y = cardY + 28;
+      pdf.addImage(logoData, 'PNG', x, y, w, h, undefined, 'FAST');
+    }
+
+    // project name
+    pdf.setTextColor(28, 37, 64);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(22);
+    pdf.text(projectTitle, pageWidth / 2, cardY + cardH - 82, { align: 'center' });
+
+    // subtitle
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(12);
+    pdf.setTextColor(76, 86, 106);
+    pdf.text('Projektbericht', pageWidth / 2, cardY + cardH - 56, { align: 'center' });
+
+    // date
+    pdf.setTextColor(104, 112, 125);
+    pdf.text(new Date().toLocaleDateString('de-CH'), pageWidth / 2, cardY + cardH - 32, { align: 'center' });
+
+    // Charts start on next page
+    pdf.addPage('a4', 'landscape');
 
     const originalIndex = chartIndex;
     for (let i = 0; i < chartTypes.length; i++) {
@@ -1720,6 +1812,7 @@ async function exportChartAsPng() {
   } catch (err) {
     setStatus('Export fehlgeschlagen: ' + (err?.message || err), true);
   } finally {
+    document.documentElement.removeAttribute('data-export');
     document.body.classList.remove('capturing');
     target.scrollLeft = prevScrollLeft;
     target.scrollTop = prevScrollTop;
