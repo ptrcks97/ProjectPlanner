@@ -42,6 +42,10 @@
           <span class="material-symbols-rounded">leaderboard</span>
           <span class="nav-label">Diagramme</span>
         </button>
+        <button class="ghost nav-pill" data-top-view-btn="forecast" title="Vorhersage">
+          <span class="material-symbols-rounded">cognition</span>
+          <span class="nav-label">Vorhersage</span>
+        </button>
         <button class="ghost nav-pill" data-top-view-btn="journal" title="Arbeitsjournal">
           <span class="material-symbols-rounded">checkbook</span>
           <span class="nav-label">Arbeitsjournal</span>
@@ -224,6 +228,64 @@
       </main>
     </div>
     </div> <!-- /top-dashboard -->
+
+    <div class="top-view" id="top-forecast">
+      <div class="layout">
+        <main class="main" style="width:100%;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-top:4px;flex-wrap:wrap;">
+            <div>
+              <h2 style="margin:4px 0 6px;">Vorhersage</h2>
+              <p class="muted" style="margin:0;">Theoretischer Plan ab heute mit offenen Arbeitspaketen (Status ≠ Finished).</p>
+            </div>
+            <div class="chip" style="background:rgba(37,99,235,0.12);border-color:rgba(37,99,235,0.24);">Nur Vorschau – Daten bleiben unverändert</div>
+          </div>
+
+          <div class="cards">
+            <div class="card">
+              <div class="muted">Start (heute)</div>
+              <div id="forecast-start-date" style="font-size:18px;font-weight:700;">-</div>
+            </div>
+            <div class="card">
+              <div class="muted">Geplante Stunden</div>
+              <div id="forecast-hours-total" style="font-size:18px;font-weight:700;">-</div>
+            </div>
+            <div class="card">
+              <div class="muted">Arbeitstage</div>
+              <div id="forecast-days-total" style="font-size:18px;font-weight:700;">-</div>
+            </div>
+            <div class="card">
+              <div class="muted">Enddatum</div>
+              <div id="forecast-end-date" style="font-size:18px;font-weight:700;">-</div>
+            </div>
+            <div class="card">
+              <div class="muted">Stunden / Woche</div>
+              <div id="forecast-week-avg" style="font-size:18px;font-weight:700;">-</div>
+            </div>
+          </div>
+
+          <div class="table-card table-wrap">
+            <div class="muted" style="margin-bottom:8px;">Reihenfolge wie im Plan, aber fertige Pakete ausgeblendet.</div>
+            <table class="data-table plan-table">
+              <thead>
+                <tr>
+                  <th>Phase</th>
+                  <th>Arbeitspaket</th>
+                  <th>Status</th>
+                  <th>Stunden</th>
+                  <th>Start</th>
+                  <th>Ende</th>
+                </tr>
+              </thead>
+              <tbody id="forecast-rows">
+                <tr><td colspan="6">Berechne Vorhersage...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div id="forecast-status" class="status">Vorhersage bereit.</div>
+        </main>
+      </div>
+    </div> <!-- /top-forecast -->
 
     <div class="top-view" id="top-journal">
       <h2 style="margin: 4px 0 6px;">Arbeitsjournal</h2>

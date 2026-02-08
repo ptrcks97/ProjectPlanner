@@ -61,6 +61,15 @@ const params = new URLSearchParams(window.location.search);
     const journalSumCell = document.getElementById('journal-sum');
     const downloadToggle = document.getElementById('download-toggle');
     const downloadPanel = document.getElementById('download-panel');
+
+    // Forecast view
+    const forecastRows = document.getElementById('forecast-rows');
+    const forecastStatus = document.getElementById('forecast-status');
+    const forecastCardStart = document.getElementById('forecast-start-date');
+    const forecastCardHours = document.getElementById('forecast-hours-total');
+    const forecastCardDays = document.getElementById('forecast-days-total');
+    const forecastCardEnd = document.getElementById('forecast-end-date');
+    const forecastCardWeek = document.getElementById('forecast-week-avg');
     const JOURNAL_KEY_PREFIX = 'work-journal-project-';
     let journalEntries = [];
     let journalEditIndex = null;
@@ -147,6 +156,11 @@ const params = new URLSearchParams(window.location.search);
       });
       if (view === 'journal') {
         viewButtons.forEach(vb => vb.classList.remove('active'));
+        return;
+      }
+      if (view === 'forecast') {
+        viewButtons.forEach(vb => vb.classList.remove('active'));
+        renderForecast();
         return;
       }
       if (view === 'kanban') {
@@ -419,7 +433,9 @@ const params = new URLSearchParams(window.location.search);
       const phaseById = Object.fromEntries(phases.map(p => [p.id, p]));
       // Order by phase then sortIndex then id
       const phaseOrder = phases.map(p => p.id);
-      packages.sort((a, b) => {
+      // work on a copy to avoid mutating shared package order elsewhere
+      const pkgList = [...packages];
+      pkgList.sort((a, b) => {
         const ia = phaseOrder.indexOf(a.phaseId);
         const ib = phaseOrder.indexOf(b.phaseId);
         const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
@@ -478,17 +494,17 @@ const params = new URLSearchParams(window.location.search);
         return { startAt, endAt };
       }
 
-      for (let i = 0; i < packages.length; i++) {
-        const pkg = packages[i];
+      for (let i = 0; i < pkgList.length; i++) {
+        const pkg = pkgList[i];
 
         // parallel block
         if (pkg.parallel) {
           let groupHours = Number(pkg.time) || 0;
           const group = [pkg];
           let j = i + 1;
-          while (j < packages.length && packages[j].parallel) {
-            groupHours += Number(packages[j].time) || 0;
-            group.push(packages[j]);
+          while (j < pkgList.length && pkgList[j].parallel) {
+            groupHours += Number(pkgList[j].time) || 0;
+            group.push(pkgList[j]);
             j++;
           }
         const { startAt, endAt } = scheduleBlock(groupHours);
@@ -528,7 +544,7 @@ const params = new URLSearchParams(window.location.search);
         idToSchedule.set(pkg.id, rec);
       }
 
-      const totalHours = packages.reduce((s, p) => s + (Number(p.time) || 0), 0);
+      const totalHours = pkgList.reduce((s, p) => s + (Number(p.time) || 0), 0);
       const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
 
       return { plan, totalHours, days: distinctDays };
@@ -673,6 +689,8 @@ const params = new URLSearchParams(window.location.search);
       renderPlan();
       renderKanbanPhaseOptions();
       renderKanbanBoard();
+      const forecastActive = document.getElementById('top-forecast')?.classList.contains('active');
+      if (forecastActive) renderForecast();
       setStatus('Zeitplan berechnet.');
     }
 
@@ -1011,6 +1029,80 @@ const params = new URLSearchParams(window.location.search);
       viewButtons.forEach(btn => {
         btn.classList.toggle('active', btn.dataset.view === currentView);
       });
+    }
+
+    function renderForecast() {
+      if (!forecastRows) return;
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0,10);
+      const openPackages = packages.filter(p => (p.status || 'ToDo') !== 'Finished');
+
+      const setCards = ({ hoursText = '-', daysText = '-', endText = '-', weekText = '-' }) => {
+        if (forecastCardStart) forecastCardStart.textContent = today.toLocaleDateString('de-CH');
+        if (forecastCardHours) forecastCardHours.textContent = hoursText;
+        if (forecastCardDays) forecastCardDays.textContent = daysText;
+        if (forecastCardEnd) forecastCardEnd.textContent = endText;
+        if (forecastCardWeek) forecastCardWeek.textContent = weekText;
+      };
+
+      if (!openPackages.length) {
+        forecastRows.innerHTML = '<tr><td colspan="6">Alle Arbeitspakete sind bereits erledigt.</td></tr>';
+        setCards({ hoursText: '0 h', daysText: '0', endText: '-', weekText: '-' });
+        forecastStatus?.classList.remove('error');
+        if (forecastStatus) forecastStatus.textContent = 'Keine offenen Arbeitspakete.';
+        return;
+      }
+
+      const { plan, totalHours, days } = computeSchedule({
+        startDate: todayStr,
+        weekly,
+        phases,
+        packages: openPackages
+      });
+
+      const maxEnd = plan.length ? new Date(Math.max(...plan.map(p => p.end))) : null;
+      const weeks = (() => {
+        if (!plan.length) return null;
+        const startMonday = startOfWeek(today);
+        const endMonday = startOfWeek(maxEnd || today);
+        const diffMs = endMonday - startMonday;
+        return Math.max(1, Math.round(diffMs / (7 * 86400000)) + 1);
+      })();
+      const avg = weeks ? (totalHours || 0) / weeks : 0;
+
+      setCards({
+        hoursText: (totalHours || 0).toFixed(1) + ' h',
+        daysText: days || 0,
+        endText: maxEnd ? maxEnd.toLocaleDateString('de-CH') : '-',
+        weekText: weeks ? `${avg.toFixed(1)} h` : '-'
+      });
+
+      const resolvePhase = (pid) => {
+        if (pid === null || pid === undefined) return 'Ohne Phase';
+        const ph = phases.find(p => p.id === pid);
+        return ph ? ph.name : 'Ohne Phase';
+      };
+
+      if (!plan.length) {
+        forecastRows.innerHTML = '<tr><td colspan="6">Keine Daten fuer Vorhersage.</td></tr>';
+      } else {
+        forecastRows.innerHTML = plan.map(p => {
+          const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
+          return `
+            <tr>
+              <td>${resolvePhase(p.phaseId)}</td>
+              <td>${p.name} ${warn}</td>
+              <td>${statusChip(p.status || 'ToDo')}</td>
+              <td>${p.hours}</td>
+              <td>${fmt(p.start)}</td>
+              <td>${fmt(p.end)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      forecastStatus?.classList.remove('error');
+      if (forecastStatus) forecastStatus.textContent = 'Vorhersage aktualisiert.';
     }
 
     function chartLabelText(type) {
