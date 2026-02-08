@@ -10,6 +10,33 @@ body.home .shell {
   padding: 28px 28px 32px;
 }
 
+body.home .home-logo {
+  position: absolute;
+  top: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+}
+
+body.home .home-logo img {
+  height: 64px;
+  width: auto;
+  filter: drop-shadow(0 10px 24px rgba(88, 28, 135, 0.22));
+}
+
+body.home .home-footer {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 13px;
+  color: rgba(15, 23, 42, 0.62);
+  letter-spacing: 0.2px;
+}
+
 body.home form {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
