@@ -116,6 +116,14 @@ const params = new URLSearchParams(window.location.search);
       sunday: document.getElementById('sun'),
     };
 
+    function hasWeeklyCapacity() {
+      const currentInputs = Object.values(weekInputs).some(inp => Number(inp?.value || 0) > 0);
+      if (currentInputs) return true;
+      if (!weekly) return false;
+      return ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+        .some(k => Number(weekly[k] || 0) > 0);
+    }
+
     // Start form inputs
     const startDateInput = document.getElementById('start-date-input');
     const durationHoursInput = document.getElementById('duration-hours');
@@ -772,6 +780,8 @@ const params = new URLSearchParams(window.location.search);
     tabWeek.addEventListener('click', () => setTab('week'));
     tabStart.addEventListener('click', () => setTab('start'));
     tabTask.addEventListener('click', () => setTab('task'));
+    // ensure initial panel matches reordered buttons
+    setTab('week');
 
     async function deletePackage(id) {
       const pkg = packages.find(p => p.id === id);
@@ -1837,6 +1847,12 @@ async function exportChartAsPng() {
       evt.preventDefault();
       const startDate = startDateInput.value;
       const durationHours = Number(durationHoursInput.value || 0);
+      if (!hasWeeklyCapacity()) {
+        setStatus('Bitte zuerst Wochenzeiten eintragen.', true);
+        setTab('week');
+        weekInputs.monday?.focus();
+        return;
+      }
       if (!startDate) {
         setStatus('Bitte Startdatum waehlen.', true);
         return;

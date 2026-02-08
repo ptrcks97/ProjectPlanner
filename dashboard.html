@@ -61,27 +61,13 @@
     <div class="layout">
       <aside class="sidebar">
         <div class="nav-icons">
-          <button class="nav-btn active" id="tab-start" title="Start & Dauer"><span class="material-symbols-rounded">calendar_clock</span></button>
-          <button class="nav-btn" id="tab-week" title="Wochentage"><span class="material-symbols-rounded">clock_loader_10</span></button>
+          <button class="nav-btn active" id="tab-week" title="Wochentage"><span class="material-symbols-rounded">clock_loader_10</span></button>
+          <button class="nav-btn" id="tab-start" title="Start & Dauer"><span class="material-symbols-rounded">calendar_clock</span></button>
           <button class="nav-btn" id="tab-phases" title="Phasen"><span class="material-symbols-rounded">format_list_numbered</span></button>
           <button class="nav-btn" id="tab-task" title="Aufgabe hinzufügen"><span class="material-symbols-rounded">add_task</span></button>
         </div>
 
-        <div id="panel-start" class="panel">
-          <h2 style="margin:4px 0 2px;">Start & Dauer</h2>
-          <div class="muted" style="margin-bottom:8px;">Projektstart und grobe Dauer.</div>
-          <form id="start-form">
-            <label> Startdatum
-              <input type="date" id="start-date-input" required>
-            </label>
-            <label> Dauer (Arbeitsstunden, optional)
-              <input type="number" id="duration-hours" min="0" step="0.5" placeholder="0">
-            </label>
-            <button type="submit" class="btn-primary">Speichern</button>
-          </form>
-        </div>
-
-        <div id="panel-week" class="hidden panel">
+        <div id="panel-week" class="panel">
           <h2 style="margin:4px 0 2px;">Wochentage</h2>
           <div class="muted" style="margin-bottom:8px;">Kapazitaeten in Stunden pro Tag.</div>
           <form id="week-form">
@@ -92,6 +78,20 @@
             <label> Freitag <input type="number" id="fri" min="0" step="0.5" placeholder="0"></label>
             <label> Samstag <input type="number" id="sat" min="0" step="0.5" placeholder="0"></label>
             <label> Sonntag <input type="number" id="sun" min="0" step="0.5" placeholder="0"></label>
+            <button type="submit" class="btn-primary">Speichern</button>
+          </form>
+        </div>
+
+        <div id="panel-start" class="hidden panel">
+          <h2 style="margin:4px 0 2px;">Start & Dauer</h2>
+          <div class="muted" style="margin-bottom:8px;">Projektstart und grobe Dauer.</div>
+          <form id="start-form">
+            <label> Startdatum
+              <input type="date" id="start-date-input" required>
+            </label>
+            <label> Dauer (Arbeitsstunden, optional)
+              <input type="number" id="duration-hours" min="0" step="0.5" placeholder="0">
+            </label>
             <button type="submit" class="btn-primary">Speichern</button>
           </form>
         </div>
