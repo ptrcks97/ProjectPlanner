@@ -631,6 +631,23 @@ body.fullscreen-chart-zoomed #chart-container {
 .line-legend span { display: flex; align-items: center; gap: 6px; }
 .line-chip { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
 
+/* Health summary chart */
+.health-grid { display: grid; gap: 14px; max-width: 760px; }
+.health-row { display: grid; grid-template-columns: 1fr 1.2fr; gap: 10px; align-items: center; }
+.health-label { font-weight: 600; color: rgba(15, 23, 42, 0.78); }
+.health-value {
+  border-radius: 18px;
+  border: 2px solid rgba(15, 23, 42, 0.18);
+  background: rgba(255, 255, 255, 0.86);
+  padding: 14px 16px;
+  font-size: 18px;
+  font-weight: 700;
+  color: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10);
+}
+.health-value.ok { border-color: rgba(34, 197, 94, 0.45); color: #15803d; }
+.health-value.warn { border-color: rgba(239, 68, 68, 0.45); color: #b91c1c; }
+
 .modal-overlay {
   position: fixed;
   inset: 0;
