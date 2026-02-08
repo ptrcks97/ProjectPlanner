@@ -40,7 +40,7 @@ const params = new URLSearchParams(window.location.search);
     const chartNext = document.getElementById('chart-next');
     const chartLabel = document.getElementById('chart-label');
     const chartImageExportBtn = document.getElementById('chart-export-img');
-    const chartTypes = ['gantt', 'phasegantt', 'pie', 'bar', 'burndown'];
+    const chartTypes = ['health', 'gantt', 'phasegantt', 'pie', 'bar', 'burndown'];
     const chartZoomBtn = document.getElementById('chart-zoom');
     let isZoomed = false;
     let chartIndex = 0;
@@ -1116,6 +1116,7 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function chartLabelText(type) {
+      if (type === 'health') return 'Projekt Status';
       if (type === 'gantt') return 'Gantt Diagramm';
       if (type === 'phasegantt') return 'Phasen Gantt';
       if (type === 'pie') return 'Kuchendiagramm';
@@ -1125,15 +1126,20 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function renderChart() {
-      if (!planCache.length) {
+      const currentType = chartTypes[chartIndex];
+      if (currentType !== 'health' && !planCache.length) {
         chartContainer.innerHTML = '<div class="muted">Keine Daten fuer Diagramm.</div>';
-        chartLabel.textContent = chartLabelText(chartTypes[chartIndex]);
+        chartLabel.textContent = chartLabelText(currentType);
         chartImageExportBtn?.classList.toggle('hidden', !isFullscreen);
         return;
       }
-      chartLabel.textContent = chartLabelText(chartTypes[chartIndex]);
+      chartLabel.textContent = chartLabelText(currentType);
       chartImageExportBtn?.classList.toggle('hidden', !isFullscreen);
-      const currentType = chartTypes[chartIndex];
+      if (currentType === 'health') {
+        chartZoomBtn.classList.add('hidden');
+        renderHealth();
+        return;
+      }
       if (currentType === 'gantt') {
         chartZoomBtn.classList.toggle('hidden', !isFullscreen);
         renderGantt();
@@ -1468,9 +1474,13 @@ const params = new URLSearchParams(window.location.search);
       const actual = [];
       for (const d of days) {
         const dayStr = d.toISOString().slice(0,10);
-        const doneToday = planCache.filter(p => p.status === 'Finished' && p.doneDate && p.doneDate.slice(0,10) <= dayStr)
-                                   .reduce((s,p)=> s + (Number(p.hours)||0), 0);
-        actualRem = Math.max(0, total - doneToday);
+        const completed = planCache
+          .filter(p => p.status === 'Finished' && (
+            (p.doneDate && p.doneDate.slice(0,10) <= dayStr) ||
+            (!p.doneDate && p.end <= d) // fallback: treat without doneDate as erledigt zum Enddatum
+          ))
+          .reduce((s,p)=> s + (Number(p.hours)||0), 0);
+        actualRem = Math.max(0, total - completed);
         actual.push({ d: new Date(d), v: actualRem });
       }
 
@@ -1496,6 +1506,87 @@ const params = new URLSearchParams(window.location.search);
           <span><span class="line-chip" style="background:${varAccent()};"></span>Ideal</span>
           <span><span class="line-chip" style="background:#f97316;"></span>Ist</span>
         </div>
+      `;
+    }
+
+    function renderHealth() {
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0,10);
+
+      const totalPlanned = packages.reduce((s,p)=> s + (Number(p.time)||0), 0);
+
+      // Same basis wie Burndown: actual = fertig, ideal = Kapazitätstage
+      const completedPlannedHours = planCache
+        .filter(p => (p.status || 'Backlog') === 'Finished' && (
+          (p.doneDate && p.doneDate.slice(0,10) <= todayStr) ||
+          (!p.doneDate && p.end <= today)
+        ))
+        .reduce((s,p)=> s + (Number(p.hours)||0), 0);
+
+      // Ideal verbleibend heute basierend auf Wochenkapazität
+      let idealRemaining = totalPlanned;
+      if (weekly && planCache.length) {
+        const minStart = new Date(Math.min(...planCache.map(p => p.start)));
+        for (let d = new Date(minStart); d <= today; d.setDate(d.getDate() + 1)) {
+          const cap = weekly?.[['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][d.getDay()]] ?? 0;
+          idealRemaining = Math.max(0, idealRemaining - cap);
+        }
+      }
+      const actualRemaining = Math.max(0, totalPlanned - completedPlannedHours);
+      const onPlan = actualRemaining <= idealRemaining + 0.001;
+
+      const remainingPlanned = packages
+        .filter(p => (p.status || 'Backlog') !== 'Finished')
+        .reduce((s,p)=> s + (Number(p.time)||0), 0);
+
+      const journalTotalHours = journalEntries
+        .reduce((s,e)=> s + (Number(e.hours)||0), 0);
+
+      let forecastEnd = '-';
+      if (weekly) {
+        const openPackages = packages.filter(p => (p.status || 'Backlog') !== 'Finished');
+        if (openPackages.length) {
+          const { plan } = computeSchedule({ startDate: todayStr, weekly, phases, packages: openPackages });
+          if (plan.length) {
+            const maxEnd = new Date(Math.max(...plan.map(p => p.end)));
+            forecastEnd = maxEnd.toLocaleDateString('de-CH');
+          }
+        }
+      }
+
+      const items = [
+        {
+          label: 'Bin ich im Plan?',
+          value: onPlan ? 'Ja' : 'Nein',
+          tone: onPlan ? 'ok' : 'warn'
+        },
+        {
+          label: 'Verbleibende geplante Stunden',
+          value: `${remainingPlanned.toFixed(1)} h`,
+          tone: 'neutral'
+        },
+        {
+          label: 'Abgeschlossen',
+          value: `${journalTotalHours.toFixed(1)} h`,
+          tone: 'neutral'
+        },
+        {
+          label: 'Forecast Projektende',
+          value: forecastEnd,
+          tone: 'neutral'
+        }
+      ];
+
+      chartContainer.innerHTML = `
+        <div class="health-grid">
+          ${items.map(it => `
+            <div class="health-row">
+              <div class="health-label">${it.label}</div>
+              <div class="health-value ${it.tone}">${it.value}</div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="muted" style="margin-top:10px;font-size:13px;">Ist/Plan basiert auf Plan-Berechnung und Arbeitsjournal; Forecast nutzt offene Pakete ab heute.</div>
       `;
     }
     function downloadBlob(blob, filename) {
