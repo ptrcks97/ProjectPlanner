@@ -84,7 +84,7 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 22px;
   box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  overflow: hidden;
+  overflow: visible; /* allow help panel to overflow */
 }
 
 h1 {
@@ -203,6 +203,55 @@ button:active {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
   transform: translateY(-1px);
 }
+
+.help-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.82);
+  color: #0f172a;
+  border: 1px solid var(--border-2);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+}
+.help-btn:hover { background: #fff; }
+.help-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.help-panel {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  max-width: 360px;
+  background: var(--card-strong);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+  padding: 14px 16px;
+  z-index: 200;
+}
+.help-panel.hidden { display: none; }
+.help-panel h4 { margin: 0 0 6px; font-size: 16px; }
+.help-panel p { margin: 0 0 8px; font-size: 14px; color: var(--muted); line-height: 1.45; }
+.help-panel ul { margin: 0; padding-left: 18px; color: var(--muted); }
+.help-panel li { margin-bottom: 4px; }
+.help-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--muted);
+  padding: 4px;
+  cursor: pointer;
+}
+
 
 table {
   width: 100%;

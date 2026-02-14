@@ -46,6 +46,13 @@ const params = new URLSearchParams(window.location.search);
     let chartIndex = 0;
     const fullscreenBtn = document.getElementById('fullscreen-btn');
     let currentView = 'plan';
+    // Help
+    const helpBtn = document.getElementById('help-btn');
+    const helpPanel = document.getElementById('help-panel');
+    const helpClose = helpPanel?.querySelector('.help-close');
+    const helpTitle = document.getElementById('help-title');
+    const helpBody = document.getElementById('help-body');
+    const helpList = document.getElementById('help-list');
 
     // Journal
     const journalForm = document.getElementById('journal-form');
@@ -141,6 +148,50 @@ const params = new URLSearchParams(window.location.search);
         .some(k => Number(weekly[k] || 0) > 0);
     }
 
+    /* ---------- Hilfe ---------- */
+    function helpKey(viewOverride) {
+      if (viewOverride && HELP_COPY[viewOverride]) return viewOverride;
+      const topActive = document.querySelector('.top-view.active');
+      if (topActive?.id === 'top-forecast') return 'forecast';
+      if (topActive?.id === 'top-journal') return 'journal';
+      if (topActive?.id === 'top-kanban') return 'kanban';
+      if (currentView === 'phase') return 'phase';
+      if (currentView === 'chart') return 'chart';
+      return 'plan';
+    }
+
+    function renderHelp(viewOverride) {
+      if (!helpPanel) return;
+      const key = helpKey(viewOverride);
+      const copy = HELP_COPY[key] || HELP_COPY.plan;
+      if (helpTitle) helpTitle.textContent = copy.title;
+      if (helpBody) helpBody.textContent = copy.body;
+      if (helpList) {
+        helpList.innerHTML = (copy.bullets || []).map(line => `<li>${line}</li>`).join('');
+      }
+    }
+
+    function toggleHelp(force) {
+      if (!helpPanel) return;
+      const willShow = force ?? helpPanel.classList.contains('hidden');
+      helpPanel.classList.toggle('hidden', !willShow);
+    }
+
+    function syncHelpVisibility() {
+      const hide = isFullscreen && currentView === 'chart';
+      if (helpBtn) helpBtn.classList.toggle('hidden', hide);
+      if (hide) helpPanel?.classList.add('hidden');
+    }
+
+    helpBtn?.addEventListener('click', () => toggleHelp());
+    helpClose?.addEventListener('click', () => toggleHelp(false));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleHelp(false); });
+    document.addEventListener('click', (e) => {
+      if (!helpPanel || helpPanel.classList.contains('hidden')) return;
+      if (helpPanel.contains(e.target) || helpBtn?.contains(e.target)) return;
+      toggleHelp(false);
+    });
+
     // Start form inputs
     const startDateInput = document.getElementById('start-date-input');
     const durationHoursInput = document.getElementById('duration-hours');
@@ -167,6 +218,58 @@ const params = new URLSearchParams(window.location.search);
       OnHold: '#ef4444',
       Finished: '#22c55e'
     };
+    const HELP_COPY = {
+      plan: {
+        title: 'Plan',
+        body: 'Zeitplan aller Arbeitspakete in Reihenfolge. Filtere nach Heute/Woche/Monat und bearbeite über die Stift-Icons.',
+        bullets: [
+          'Parallel/Projektweit markierte Pakete behalten ihre Logik im Plan.',
+          'Exports: Diagramme im Tab „Diagramme“ (Bild/PDF) erstellen.',
+          'Arbeitsjournal-Exports (CSV, Markdown, PDF) unter „Arbeitsjournal“.'
+        ]
+      },
+      phase: {
+        title: 'Nach Phase',
+        body: 'Arbeitspakete gruppiert nach Phase, per Drag & Drop innerhalb einer Phase neu sortieren.',
+        bullets: [
+          'Ausrufezeichen bedeutet: Paket ohne Phase.',
+          'Exports wie oben über „Diagramme“ bzw. „Arbeitsjournal“.'
+        ]
+      },
+      chart: {
+        title: 'Diagramme',
+        body: 'Blättere mit < und > durch Gantt, Phasen-Gantt, Pie, Bar, Burndown. Volle Breite per „Fullscreen“.',
+        bullets: [
+          'Bild Export: Button rechts (PNG).',
+          'PDF: „Bild Export“ + PDF-Export-Button, mehrere Charts werden gesammelt.',
+          'Fullscreen blendet die Hilfe aus; mit „Schliessen“ zurück.'
+        ]
+      },
+      forecast: {
+        title: 'Vorhersage',
+        body: 'Theoretischer Plan ab heute mit allen offenen Paketen. Daten bleiben unverändert.',
+        bullets: [
+          'Nutze, um schnell das erwartete Enddatum zu sehen.',
+          'Exports: wechsle zu „Diagramme“ für Bild/PDF; Journal-Exports wie gewohnt.'
+        ]
+      },
+      journal: {
+        title: 'Arbeitsjournal',
+        body: 'Zeiterfassung pro Tag. Pakete optional zuordenbar.',
+        bullets: [
+          'Download-Menü: CSV (voll/reduced), Markdown, PDF/Screenshot.',
+          'Bearbeiten/Löschen direkt in der Tabelle.'
+        ]
+      },
+      kanban: {
+        title: 'Kanban',
+        body: 'Statusbasierte Übersicht für die ausgewählte Phase. Karten per Drag & Drop verschieben.',
+        bullets: [
+          'Statuswechsel aktualisiert den Plan automatisch.',
+          'Exports: Diagramme & Journal wie oben.'
+        ]
+      }
+    };
 
     if (projectId) back.href = `index.html`;
 
@@ -179,6 +282,8 @@ const params = new URLSearchParams(window.location.search);
           viewButtons.forEach(vb => vb.classList.toggle('active', vb.dataset.view === 'journal'));
         }
       });
+      renderHelp(view);
+      syncHelpVisibility();
       if (view === 'journal') {
         viewButtons.forEach(vb => vb.classList.remove('active'));
         return;
@@ -1218,6 +1323,8 @@ const params = new URLSearchParams(window.location.search);
       viewButtons.forEach(btn => {
         btn.classList.toggle('active', btn.dataset.view === currentView);
       });
+      renderHelp();
+      syncHelpVisibility();
     }
 
     function renderForecast() {
