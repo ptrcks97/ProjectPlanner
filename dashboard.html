@@ -421,6 +421,49 @@
     </div>
   </div>
 
+  <!-- Read-only Detail Modal -->
+  <div id="task-detail-modal" class="modal-overlay hidden">
+    <div class="modal-box detail-box">
+      <div class="modal-head">
+        <div>
+          <div class="muted">Arbeitspaket</div>
+          <h2 id="detail-title">Arbeitspaket</h2>
+        </div>
+        <button id="close-detail" class="ghost" type="button">Schliessen</button>
+      </div>
+      <div class="detail-meta">
+        <span id="detail-status" class="pill">-</span>
+        <span class="pill">Phase: <strong id="detail-phase">-</strong></span>
+        <span class="pill">ID: <strong id="detail-id">-</strong></span>
+        <span class="pill">Parallel: <strong id="detail-parallel">-</strong></span>
+      </div>
+      <div class="detail-grid">
+        <div>
+          <div class="muted">Beschreibung</div>
+          <p id="detail-desc" class="detail-desc">-</p>
+        </div>
+        <div class="detail-stats">
+          <div class="stat">
+            <div class="muted">Status</div>
+            <div id="detail-status-plain">-</div>
+          </div>
+          <div class="stat">
+            <div class="muted">Stunden</div>
+            <div id="detail-hours">-</div>
+          </div>
+          <div class="stat">
+            <div class="muted">Start</div>
+            <div id="detail-start">-</div>
+          </div>
+          <div class="stat">
+            <div class="muted">Ende</div>
+            <div id="detail-end">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script type="module" src="assets/js/dashboard.js"></script>
 </body>
