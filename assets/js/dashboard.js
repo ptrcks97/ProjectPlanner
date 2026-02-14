@@ -86,6 +86,20 @@ const params = new URLSearchParams(window.location.search);
     const taskParallel = document.getElementById('task-parallel');
     const closeModalBtn = document.getElementById('close-modal');
     const cancelModalBtn = document.getElementById('cancel-modal');
+
+    // Detail modal (read-only)
+    const detailModal = document.getElementById('task-detail-modal');
+    const detailClose = document.getElementById('close-detail');
+    const detailTitle = document.getElementById('detail-title');
+    const detailDesc = document.getElementById('detail-desc');
+    const detailPhase = document.getElementById('detail-phase');
+    const detailStatus = document.getElementById('detail-status');
+    const detailStatusPlain = document.getElementById('detail-status-plain');
+    const detailHours = document.getElementById('detail-hours');
+    const detailStart = document.getElementById('detail-start');
+    const detailEnd = document.getElementById('detail-end');
+    const detailId = document.getElementById('detail-id');
+    const detailParallel = document.getElementById('detail-parallel');
     // inline task form
     const inlineTaskForm = document.getElementById('inline-task-form');
     const inlineTaskPhase = document.getElementById('inline-task-phase');
@@ -625,6 +639,37 @@ const params = new URLSearchParams(window.location.search);
       dragPhase = null;
     });
 
+    // Task detail click handlers (Plan, Phase, Kanban)
+    document.addEventListener('click', (e) => {
+      const row = e.target.closest('.task-row');
+      if (row && !e.target.closest('[data-edit],[data-delete],[data-action]')) {
+        const id = Number(row.dataset.id || row.dataset.taskId);
+        const pkg = packages.find(p => p.id === id);
+        if (pkg) openDetailModal(pkg);
+      }
+      const kanbanCard = e.target.closest('.kanban-card');
+      if (kanbanCard) {
+        const id = Number(kanbanCard.dataset.id);
+        const pkg = packages.find(p => p.id === id);
+        if (pkg) openDetailModal(pkg);
+      }
+    });
+
+    detailClose?.addEventListener('click', closeDetailModal);
+    detailModal?.addEventListener('click', (e) => {
+      if (e.target === detailModal) closeDetailModal();
+    });
+    detailModal?.addEventListener('wheel', (e) => {
+      // prevent background scroll on overscroll
+      const box = detailModal.querySelector('.modal-box');
+      if (!box) return;
+      const atTop = box.scrollTop === 0;
+      const atBottom = Math.ceil(box.scrollTop + box.clientHeight) >= box.scrollHeight;
+      if ((atTop && e.deltaY < 0) || (atBottom && e.deltaY > 0)) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+
     async function updatePhaseOrder(phaseId, orderedIds) {
       for (let i=0;i<orderedIds.length;i++){
         const id = orderedIds[i];
@@ -842,6 +887,36 @@ const params = new URLSearchParams(window.location.search);
       editingId = null;
     }
 
+    function resolvePhaseName(pid) {
+      if (pid === null || pid === undefined) return 'Ohne Phase';
+      const ph = phases.find(p => p.id === pid);
+      return ph ? ph.name : 'Ohne Phase';
+    }
+
+    function statusLabel(status) {
+      return KANBAN_LABELS[status] || status || 'Backlog';
+    }
+
+    function openDetailModal(pkg) {
+      if (!detailModal) return;
+      detailTitle.textContent = pkg.name || 'Arbeitspaket';
+      detailDesc.textContent = pkg.description || 'Keine Beschreibung';
+      detailPhase.textContent = resolvePhaseName(pkg.phaseId);
+      detailId.textContent = pkg.id ?? '-';
+      detailParallel.textContent = pkg.parallel ? 'Ja' : 'Nein';
+      detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
+      detailStatusPlain.textContent = statusLabel(pkg.status);
+      detailHours.textContent = `${pkg.time ?? '-'} h`;
+      const sched = planCache.find(p => p.id === pkg.id);
+      detailStart.textContent = sched?.start ? sched.start.toLocaleDateString('de-CH') : '-';
+      detailEnd.textContent = sched?.end ? sched.end.toLocaleDateString('de-CH') : '-';
+      detailModal.classList.remove('hidden');
+    }
+
+    function closeDetailModal() {
+      detailModal?.classList.add('hidden');
+    }
+
     function renderPlanTable() {
       const resolvePhase = (pid) => {
         if (pid === null || pid === undefined) return 'Ohne Phase';
@@ -856,7 +931,7 @@ const params = new URLSearchParams(window.location.search);
       rows.innerHTML = list.map(p => {
         const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
         return `
-        <tr>
+        <tr class="task-row" data-task-id="${p.id}">
           <td>${resolvePhase(p.phaseId)}</td>
           <td>${p.name} ${warn}</td>
           <td>${statusChip(p.status || 'ToDo')}</td>
@@ -905,7 +980,7 @@ const params = new URLSearchParams(window.location.search);
         const title = phaseName(key);
         const showWarn = key === 'none';
         const rowsHtml = list.map(p => `
-          <tr draggable="true" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
+          <tr draggable="true" class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
             <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''}</td>
             <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
