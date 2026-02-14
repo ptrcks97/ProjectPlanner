@@ -84,6 +84,7 @@ const params = new URLSearchParams(window.location.search);
     const taskTime = document.getElementById('task-time');
     const taskStatus = document.getElementById('task-status');
     const taskParallel = document.getElementById('task-parallel');
+    const taskSpread = document.getElementById('task-spread');
     const closeModalBtn = document.getElementById('close-modal');
     const cancelModalBtn = document.getElementById('cancel-modal');
 
@@ -100,6 +101,7 @@ const params = new URLSearchParams(window.location.search);
     const detailEnd = document.getElementById('detail-end');
     const detailId = document.getElementById('detail-id');
     const detailParallel = document.getElementById('detail-parallel');
+    const detailSpread = document.getElementById('detail-spread');
     // inline task form
     const inlineTaskForm = document.getElementById('inline-task-form');
     const inlineTaskPhase = document.getElementById('inline-task-phase');
@@ -107,6 +109,7 @@ const params = new URLSearchParams(window.location.search);
     const inlineTaskDesc = document.getElementById('inline-task-desc');
     const inlineTaskStatus = document.getElementById('inline-task-status');
     const inlineTaskParallel = document.getElementById('inline-task-parallel');
+    const inlineTaskSpread = document.getElementById('inline-task-spread');
     const inlineTaskTime = document.getElementById('inline-task-time');
     const reloadBtn = document.getElementById('reload-btn');
     let editingId = null;
@@ -452,121 +455,184 @@ const params = new URLSearchParams(window.location.search);
         6: weekly?.saturday ?? 0,
         0: weekly?.sunday ?? 0
       };
-      const phaseById = Object.fromEntries(phases.map(p => [p.id, p]));
-      // Order by phase then sortIndex then id
+      const weeklyTotal = Object.values(weeklyMap).reduce((s, h) => s + (Number(h) || 0), 0);
+      if (weeklyTotal <= 0) return { plan: [], totalHours: 0, days: 0 };
+
       const phaseOrder = phases.map(p => p.id);
-      // work on a copy to avoid mutating shared package order elsewhere
-      const pkgList = [...packages];
-      pkgList.sort((a, b) => {
-        const ia = phaseOrder.indexOf(a.phaseId);
-        const ib = phaseOrder.indexOf(b.phaseId);
-        const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        if (sa === sb) {
-          const si = (a.sortIndex ?? Number.MAX_SAFE_INTEGER);
-          const sj = (b.sortIndex ?? Number.MAX_SAFE_INTEGER);
-          if (si !== sj) return si - sj;
-          return (a.id ?? 0) - (b.id ?? 0);
-        }
-        return sa - sb;
-      });
-
-      const plan = [];
-      const idToSchedule = new Map();
-      let current = new Date(startDate);
-
-      const capMap = new Map(); // key: toDateString -> remaining hours
-      const capKey = (d) => new Date(d).toDateString();
-      const getCap = (d) => {
-        const k = capKey(d);
-        if (!capMap.has(k)) capMap.set(k, weeklyMap[d.getDay()] ?? 0);
-        return capMap.get(k);
+      const sortPackages = (list) => {
+        const copy = [...list];
+        copy.sort((a, b) => {
+          const ia = phaseOrder.indexOf(a.phaseId);
+          const ib = phaseOrder.indexOf(b.phaseId);
+          const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
+          const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
+          if (sa === sb) {
+            const si = (a.sortIndex ?? Number.MAX_SAFE_INTEGER);
+            const sj = (b.sortIndex ?? Number.MAX_SAFE_INTEGER);
+            if (si !== sj) return si - sj;
+            return (a.id ?? 0) - (b.id ?? 0);
+          }
+          return sa - sb;
+        });
+        return copy;
       };
-      const setCap = (d, val) => capMap.set(capKey(d), val);
 
-      const moveToAvailableDay = (d) => {
-        let day = new Date(d);
-        while (getCap(day) <= 0) {
+      const spreadTasks = packages.filter(p => p.spread);
+      const normalTasks = sortPackages(packages.filter(p => !p.spread));
+
+      function scheduleSequential(list, capTemplate) {
+        const plan = [];
+        let current = new Date(startDate);
+        const capMap = new Map(); // dateStr -> remaining hours
+        const capKey = (d) => new Date(d).toDateString();
+        const getCap = (d) => {
+          const k = capKey(d);
+          if (!capMap.has(k)) capMap.set(k, capTemplate[d.getDay()] ?? 0);
+          return capMap.get(k);
+        };
+        const setCap = (d, val) => capMap.set(capKey(d), val);
+        const moveToAvailableDay = (d) => {
+          let day = new Date(d);
+          while (getCap(day) <= 0) {
+            day.setDate(day.getDate() + 1);
+          }
+          return day;
+        };
+        current = moveToAvailableDay(current);
+
+        function scheduleBlock(totalHours) {
+          let datePtr = new Date(current);
+          let startAt = null;
+          let remaining = totalHours;
+          while (remaining > 0) {
+            datePtr = moveToAvailableDay(datePtr);
+            let cap = getCap(datePtr);
+            if (cap <= 0) { datePtr.setDate(datePtr.getDate() + 1); continue; }
+            if (!startAt) startAt = new Date(datePtr);
+            const consume = Math.min(remaining, cap);
+            cap -= consume;
+            setCap(datePtr, cap);
+            remaining -= consume;
+            if (remaining > 0) {
+              datePtr.setDate(datePtr.getDate() + 1);
+            }
+          }
+          const endAt = new Date(datePtr);
+          current = new Date(datePtr);
+          return { startAt, endAt };
+        }
+
+        for (let i = 0; i < list.length; i++) {
+          const pkg = list[i];
+          if (pkg.parallel) {
+            let groupHours = Number(pkg.time) || 0;
+            const group = [pkg];
+            let j = i + 1;
+            while (j < list.length && list[j].parallel) {
+              groupHours += Number(list[j].time) || 0;
+              group.push(list[j]);
+              j++;
+            }
+            const { startAt, endAt } = scheduleBlock(groupHours);
+            for (const g of group) {
+              plan.push({
+                id: g.id,
+                phaseId: g.phaseId,
+                name: g.name,
+                hours: g.time,
+                status: g.status || 'ToDo',
+                doneDate: g.doneDate,
+                start: new Date(startAt),
+                end: new Date(endAt),
+                parallel: !!g.parallel,
+                spread: !!g.spread
+              });
+            }
+            i = j - 1;
+            continue;
+          }
+          const { startAt, endAt } = scheduleBlock(Number(pkg.time) || 0);
+          plan.push({
+            id: pkg.id,
+            phaseId: pkg.phaseId,
+            name: pkg.name,
+            hours: pkg.time,
+            status: pkg.status || 'ToDo',
+            doneDate: pkg.doneDate,
+            start: startAt,
+            end: endAt,
+            parallel: !!pkg.parallel,
+            spread: !!pkg.spread
+          });
+        }
+
+        const maxEnd = plan.length ? new Date(Math.max(...plan.map(p => p.end))) : new Date(startDate);
+        const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
+        const totalHours = plan.reduce((s, p) => s + (Number(p.hours) || 0), 0);
+        return { plan, maxEnd, days: distinctDays, totalHours };
+      }
+
+      const spreadTotal = spreadTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
+      const normalTotal = normalTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
+      let weeksGuess = Math.max(1, Math.ceil((normalTotal || spreadTotal || 1) / weeklyTotal));
+
+      let normalPlan = [];
+      let finalWeeks = weeksGuess;
+      for (let iter = 0; iter < 6; iter++) {
+        const perWeekSpread = spreadTotal / weeksGuess;
+        const adjustedWeekMap = {};
+        Object.entries(weeklyMap).forEach(([day, cap]) => {
+          const share = weeklyTotal ? (cap || 0) / weeklyTotal : 0;
+          adjustedWeekMap[day] = Math.max(0, (cap || 0) - perWeekSpread * share);
+        });
+        const res = scheduleSequential(normalTasks, adjustedWeekMap);
+        normalPlan = res.plan;
+        const maxEnd = res.maxEnd || new Date(startDate);
+        const startMonday = startOfWeek(new Date(startDate));
+        const endMonday = startOfWeek(maxEnd);
+        const diffMs = endMonday - startMonday;
+        const weeksActual = Math.max(1, Math.round(diffMs / (7 * 86400000)) + 1);
+        finalWeeks = weeksActual;
+        if (weeksActual === weeksGuess) break;
+        weeksGuess = weeksActual;
+      }
+
+      const spreadPlan = [];
+      const projectStart = new Date(startDate);
+      const findDayWithCap = (weekStart) => {
+        let day = new Date(weekStart);
+        for (let i = 0; i < 7; i++) {
+          const dow = day.getDay();
+          if ((weeklyMap[dow] ?? 0) > 0) return new Date(day);
           day.setDate(day.getDate() + 1);
         }
-        return day;
+        return new Date(weekStart);
       };
 
-      current = moveToAvailableDay(current);
-
-      function scheduleBlock(totalHours) {
-        let datePtr = new Date(current);
-        let startAt = null;
-        let remaining = totalHours;
-        while (remaining > 0) {
-          datePtr = moveToAvailableDay(datePtr);
-          let cap = getCap(datePtr);
-          if (cap <= 0) { datePtr.setDate(datePtr.getDate() + 1); continue; }
-          if (!startAt) startAt = new Date(datePtr);
-          const consume = Math.min(remaining, cap);
-          cap -= consume;
-          setCap(datePtr, cap);
-          remaining -= consume;
-          if (remaining > 0) {
-            datePtr.setDate(datePtr.getDate() + 1);
-          }
+      spreadTasks.forEach(t => {
+        const perWeek = (Number(t.time) || 0) / finalWeeks;
+        if (perWeek <= 0) return;
+        for (let w = 0; w < finalWeeks; w++) {
+          const rawStart = new Date(projectStart.getTime() + w * 7 * 86400000);
+          const weekStart = w === 0 ? projectStart : startOfWeek(rawStart);
+          const day = findDayWithCap(weekStart < projectStart ? projectStart : weekStart);
+          spreadPlan.push({
+            id: t.id,
+            phaseId: t.phaseId,
+            name: t.name,
+            hours: perWeek,
+            status: t.status || 'ToDo',
+            doneDate: t.doneDate,
+            start: day,
+            end: day,
+            parallel: !!t.parallel,
+            spread: true
+          });
         }
-        const endAt = new Date(datePtr);
-        current = new Date(datePtr);
-        return { startAt, endAt };
-      }
+      });
 
-      for (let i = 0; i < pkgList.length; i++) {
-        const pkg = pkgList[i];
-
-        // parallel block
-        if (pkg.parallel) {
-          let groupHours = Number(pkg.time) || 0;
-          const group = [pkg];
-          let j = i + 1;
-          while (j < pkgList.length && pkgList[j].parallel) {
-            groupHours += Number(pkgList[j].time) || 0;
-            group.push(pkgList[j]);
-            j++;
-          }
-        const { startAt, endAt } = scheduleBlock(groupHours);
-        for (const g of group) {
-          const rec = {
-            id: g.id,
-            phaseId: g.phaseId,
-            name: g.name,
-            hours: g.time,
-            status: g.status || 'ToDo',
-            doneDate: g.doneDate,
-            start: new Date(startAt),
-            end: new Date(endAt),
-            parallel: !!g.parallel
-          };
-            plan.push(rec);
-            idToSchedule.set(g.id, rec);
-          }
-          i = j - 1;
-          continue;
-        }
-
-        // normal task
-        const { startAt, endAt } = scheduleBlock(Number(pkg.time) || 0);
-        const rec = {
-          id: pkg.id,
-          phaseId: pkg.phaseId,
-          name: pkg.name,
-          hours: pkg.time,
-          status: pkg.status || 'ToDo',
-          doneDate: pkg.doneDate,
-          start: startAt,
-          end: endAt,
-          parallel: !!pkg.parallel
-        };
-        plan.push(rec);
-        idToSchedule.set(pkg.id, rec);
-      }
-
-      const totalHours = pkgList.reduce((s, p) => s + (Number(p.time) || 0), 0);
+      const plan = [...normalPlan, ...spreadPlan].sort((a, b) => a.start - b.start || a.end - b.end);
+      const totalHours = normalTotal + spreadTotal;
       const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
 
       return { plan, totalHours, days: distinctDays };
@@ -598,6 +664,40 @@ const params = new URLSearchParams(window.location.search);
         if (filterMode === 'week') return p.start >= monday && p.start <= new Date(monday.getTime()+6*86400000);
         if (filterMode === 'month') return p.start >= monthStart && p.start <= monthEnd;
         return true;
+      });
+    }
+
+    function aggregatedPlan() {
+      const list = filteredPlan();
+      const map = new Map();
+      list.forEach(p => {
+        if (!p.spread) { map.set(p.id, p); return; }
+        const existing = map.get(p.id);
+        if (!existing) {
+          map.set(p.id, { ...p, __count: 1, startMin: p.start, endMax: p.end, totalHours: Number(p.hours) || 0 });
+        } else {
+          existing.totalHours = (Number(existing.totalHours) || 0) + (Number(p.hours) || 0);
+          existing.__count += 1;
+          if (p.start < existing.startMin) existing.startMin = p.start;
+          if (p.end > existing.endMax) existing.endMax = p.end;
+        }
+      });
+      return Array.from(map.values()).map(v => {
+        if (!v.spread) return v;
+        const perWeek = v.__count ? (v.totalHours / v.__count) : v.totalHours;
+        return {
+          id: v.id,
+          phaseId: v.phaseId,
+          name: v.name,
+          status: v.status,
+          doneDate: v.doneDate,
+          parallel: v.parallel,
+          spread: true,
+          hours: v.totalHours,
+          perWeek,
+          start: v.startMin,
+          end: v.endMax
+        };
       });
     }
 
@@ -876,6 +976,7 @@ const params = new URLSearchParams(window.location.search);
       taskDesc.value = pkg?.description || '';
       taskStatus.value = pkg?.status || 'ToDo';
       taskParallel.checked = !!pkg?.parallel;
+      taskSpread.checked = !!pkg?.spread;
       taskTime.value = pkg?.time ?? 0;
       const selectedPhase = pkg?.phaseId ?? '';
       taskPhase.innerHTML = `<option value="">(keine Phase)</option>` + phases.map(p => `<option value="${p.id}" ${p.id === selectedPhase ? 'selected' : ''}>${p.name}</option>`).join('');
@@ -904,6 +1005,7 @@ const params = new URLSearchParams(window.location.search);
       detailPhase.textContent = resolvePhaseName(pkg.phaseId);
       detailId.textContent = pkg.id ?? '-';
       detailParallel.textContent = pkg.parallel ? 'Ja' : 'Nein';
+      detailSpread.textContent = pkg.spread ? 'Ja' : 'Nein';
       detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
       detailStatusPlain.textContent = statusLabel(pkg.status);
       detailHours.textContent = `${pkg.time ?? '-'} h`;
@@ -923,17 +1025,18 @@ const params = new URLSearchParams(window.location.search);
         const ph = phases.find(p => p.id === pid);
         return ph ? ph.name : 'Ohne Phase';
       };
-      const list = filteredPlan();
+      const list = aggregatedPlan();
       if (!list.length) {
         rows.innerHTML = '<tr><td colspan="7">Keine Arbeitspakete vorhanden.</td></tr>';
         return;
       }
       rows.innerHTML = list.map(p => {
         const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
+        const spread = p.spread ? `<span class="pill pill-ghost">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : '';
         return `
         <tr class="task-row" data-task-id="${p.id}">
           <td>${resolvePhase(p.phaseId)}</td>
-          <td>${p.name} ${warn}</td>
+          <td>${p.name} ${warn} ${spread}</td>
           <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
           <td>${fmt(p.start)}</td>
@@ -953,7 +1056,7 @@ const params = new URLSearchParams(window.location.search);
         const ph = phases.find(p => p.id === pid);
         return ph ? ph.name : 'Ohne Phase';
       };
-      const list = filteredPlan();
+      const list = aggregatedPlan();
       if (!list.length) {
         phaseView.innerHTML = '<div class="muted">Keine Arbeitspakete vorhanden.</div>';
         return;
@@ -981,7 +1084,7 @@ const params = new URLSearchParams(window.location.search);
         const showWarn = key === 'none';
         const rowsHtml = list.map(p => `
           <tr draggable="true" class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
-            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''}</td>
+            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''} ${p.spread ? `<span class=\"pill pill-ghost\">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : ''}</td>
             <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
             <td>${fmt(p.start)}</td>
@@ -1294,14 +1397,22 @@ const params = new URLSearchParams(window.location.search);
         const rowBg = pid === 'none' ? 'rgba(255,255,255,0.01)' : `${color}22`;
         const barHeight = isZoomed ? 32 : 26;
         const barSpacing = isZoomed ? 44 : 32;
+        const rowIndex = new Map();
+        let rowCount = 0;
+        const rowsForItems = items.map(t => {
+          const key = t.spread ? `spread-${t.id}` : `task-${t.id}`;
+          if (!rowIndex.has(key)) rowIndex.set(key, rowCount++);
+          return rowIndex.get(key);
+        });
         const barRows = items.map((t, idx) => {
           const startOffset = (t.start - minStart) / 86400000;
           const duration = ((t.end - t.start) / 86400000) + 1;
           const left = (startOffset / totalDays) * 100;
           const width = (duration / totalDays) * 100 * barScale;
-          return `<div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:${idx*barSpacing}px;height:${barHeight}px;">${t.name}</div>`;
+          const row = rowsForItems[idx];
+          return `<div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:${row*barSpacing}px;height:${barHeight}px;">${t.name}</div>`;
         }).join('');
-        const trackHeight = Math.max(barSpacing, items.length * barSpacing + 12);
+        const trackHeight = Math.max(barSpacing, rowCount * barSpacing + 12);
         return `
           <div class="gantt-row">
             <div class="gantt-label" style="background:${rowBg};">${phaseName(pid)}</div>
@@ -1910,7 +2021,8 @@ async function exportChartAsPng() {
         description: taskDesc.value.trim(),
         time: Number(taskTime.value),
         status: taskStatus.value || 'Backlog',
-        parallel: taskParallel.checked
+        parallel: taskParallel.checked,
+        spread: taskSpread.checked
       };
       if (!payload.name) {
         setStatus('Name darf nicht leer sein.', true);
@@ -2252,6 +2364,7 @@ async function exportChartAsPng() {
         description: inlineTaskDesc.value.trim(),
         status: inlineTaskStatus.value || 'Backlog',
         parallel: inlineTaskParallel.checked,
+        spread: inlineTaskSpread.checked,
         time: Number(inlineTaskTime.value)
       };
       if (!payload.name) { setStatus('Bitte Aufgabennamen angeben.', true); return; }

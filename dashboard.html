@@ -143,6 +143,9 @@
             <label class="check-row">
               <input id="inline-task-parallel" type="checkbox"> Parallel
             </label>
+            <label class="check-row">
+              <input id="inline-task-spread" type="checkbox"> Auf das gesamte Projekt aufteilen
+            </label>
             <label>Stunden
               <input id="inline-task-time" type="number" min="0" step="0.5" required>
             </label>
@@ -410,6 +413,10 @@
           <input id="task-parallel" type="checkbox">
           Parallel
         </label>
+        <label class="check-row">
+          <input id="task-spread" type="checkbox">
+          Auf das gesamte Projekt aufteilen
+        </label>
         <label>Stunden
           <input id="task-time" type="number" min="0" step="0.5" required>
         </label>
@@ -436,6 +443,7 @@
         <span class="pill">Phase: <strong id="detail-phase">-</strong></span>
         <span class="pill">ID: <strong id="detail-id">-</strong></span>
         <span class="pill">Parallel: <strong id="detail-parallel">-</strong></span>
+        <span class="pill">Projektweit: <strong id="detail-spread">-</strong></span>
       </div>
       <div class="detail-grid">
         <div>
