@@ -934,14 +934,15 @@ const params = new URLSearchParams(window.location.search);
     /* ---------- Kanban ---------- */
     function renderKanbanPhaseOptions() {
       if (!kanbanPhaseSelect) return;
+      // Auswahl merken, damit der Nutzer beim Reload/Drag nicht immer auf Phase 1 zurückfällt
+      const previous = kanbanPhaseSelect.value;
       if (!phases.length) {
         kanbanPhaseSelect.innerHTML = '<option value="">(keine Phasen)</option>';
         return;
       }
       kanbanPhaseSelect.innerHTML = phases.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-      if (!kanbanPhaseSelect.value && phases.length) {
-        kanbanPhaseSelect.value = phases[0].id;
-      }
+      const found = phases.find(p => String(p.id) === previous);
+      kanbanPhaseSelect.value = found ? previous : (phases[0]?.id ?? '');
     }
 
     function renderKanbanBoard() {
