@@ -16,10 +16,22 @@
     <img src="assets/logo/logo.png" alt="Project Planner Logo">
   </div>
   <div class="shell">
-    <header>
+    <header style="position:relative; display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
       <div>
         <h1>Projekt hinzufügen</h1>
         <p class="hint">Plan your project now!</code></p>
+      </div>
+      <div style="position:relative;">
+        <button id="help-btn" class="help-btn" type="button" aria-label="Hilfe">?</button>
+        <div id="help-panel" class="help-panel hidden">
+          <button class="help-close" type="button" aria-label="Schliessen">&times;</button>
+          <h4 id="help-title">Projekte anlegen</h4>
+          <p id="help-body">Füge hier ein neues Projekt hinzu. Gib Name und grobe Stundenanzahl an, speichere, und öffne es im Dashboard für detaillierte Planung.</p>
+          <ul>
+            <li>Über den Link in der Tabelle gelangst du zum Dashboard.</li>
+            <li>Exporte: Diagramme (PNG/PDF) im Dashboard & Arbeitsjournal (CSV/Markdown/PDF) unter „Arbeitsjournal“.</li>
+          </ul>
+        </div>
       </div>
     </header>
 

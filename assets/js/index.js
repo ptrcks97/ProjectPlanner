@@ -3,6 +3,26 @@
   const form = document.getElementById('project-form');
   const rows = document.getElementById('project-rows');
   const status = document.getElementById('status');
+  const helpBtn = document.getElementById('help-btn');
+  const helpPanel = document.getElementById('help-panel');
+  const helpClose = helpPanel?.querySelector('.help-close');
+
+  function toggleHelp(force) {
+    if (!helpPanel) return;
+    const willShow = force ?? helpPanel.classList.contains('hidden');
+    helpPanel.classList.toggle('hidden', !willShow);
+  }
+
+  helpBtn?.addEventListener('click', () => toggleHelp());
+  helpClose?.addEventListener('click', () => toggleHelp(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') toggleHelp(false);
+  });
+  document.addEventListener('click', (e) => {
+    if (!helpPanel || helpPanel.classList.contains('hidden')) return;
+    if (helpPanel.contains(e.target) || helpBtn?.contains(e.target)) return;
+    toggleHelp(false);
+  });
 
   async function loadProjects() {
     try {
