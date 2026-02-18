@@ -197,6 +197,7 @@ const params = new URLSearchParams(window.location.search);
     const durationHoursInput = document.getElementById('duration-hours');
 
     let phases = [];
+    let phaseListDragId = null;
     let packages = [];
     let weekly = null;
     let startStr = null;
@@ -342,11 +343,22 @@ const params = new URLSearchParams(window.location.search);
       }
     }
 
+    function comparePhases(a, b) {
+      const ai = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number(a.id ?? 0);
+      const bi = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number(b.id ?? 0);
+      if (ai !== bi) return ai - bi;
+      return (a.id ?? 0) - (b.id ?? 0);
+    }
+
     async function loadPhases() {
       const res = await apiRequest(`/phases?projectId=${projectId}`);
       if (!res.ok) return;
       const arr = await res.json();
-      phases = arr.sort((a, b) => (a.id ?? 0) - (b.id ?? 0));
+      const normalized = arr.map((p, idx) => ({
+        ...p,
+        sortIndex: Number.isFinite(Number(p.sortIndex)) ? Number(p.sortIndex) : (Number(p.id ?? idx) || idx)
+      }));
+      phases = normalized.sort(comparePhases);
       renderPhaseList();
       renderJournalPhaseOptions();
       renderTaskPhaseOptions();
@@ -563,7 +575,8 @@ const params = new URLSearchParams(window.location.search);
       const weeklyTotal = Object.values(weeklyMap).reduce((s, h) => s + (Number(h) || 0), 0);
       if (weeklyTotal <= 0) return { plan: [], totalHours: 0, days: 0 };
 
-      const phaseOrder = phases.map(p => p.id);
+      const orderedPhases = [...phases].sort(comparePhases);
+      const phaseOrder = orderedPhases.map(p => p.id);
       const sortPackages = (list) => {
         const copy = [...list];
         copy.sort((a, b) => {
@@ -844,6 +857,28 @@ const params = new URLSearchParams(window.location.search);
       dragPhase = null;
     });
 
+    async function updatePhaseSequence(orderedIds) {
+      try {
+        for (let i = 0; i < orderedIds.length; i++) {
+          const phaseId = orderedIds[i];
+          const phase = phases.find(p => p.id === phaseId);
+          if (!phase) continue;
+          const currentIdx = Number.isFinite(Number(phase.sortIndex)) ? Number(phase.sortIndex) : null;
+          if (currentIdx === i) { phase.sortIndex = i; continue; }
+          const res = await apiRequest(`/phases/${phaseId}`, {
+            method: 'PUT',
+            body: { ...phase, sortIndex: i, projectId }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          phase.sortIndex = i;
+        }
+        await refreshPlan();
+        setStatus('Phasen neu sortiert.');
+      } catch (err) {
+        setStatus('Sortierung fehlgeschlagen (' + err.message + ').', true);
+      }
+    }
+
     // Task detail click handlers (Plan, Phase, Kanban)
     document.addEventListener('click', (e) => {
       const row = e.target.closest('.task-row');
@@ -924,12 +959,17 @@ const params = new URLSearchParams(window.location.search);
 
     function renderPhaseList() {
       if (!phases.length) {
-        phaseRows.innerHTML = '<tr><td colspan="3">Keine Phasen.</td></tr>';
+        phaseRows.innerHTML = '<div class="muted">Keine Phasen.</div>';
         return;
       }
-      phaseRows.innerHTML = phases.map(p => `
-        <div class="phase-row" data-phase-id="${p.id}" style="background:${(p.color || '#22d3ee')}18; border-color:${(p.color || '#22d3ee')}40;">
-          <div class="phase-name" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width: 260px;">${p.name}</div>
+      phaseRows.innerHTML = phases.map((p, idx) => `
+        <div class="phase-row" draggable="true" data-phase-id="${p.id}" data-sort-index="${p.sortIndex ?? idx}" style="background:${(p.color || '#22d3ee')}18; border-color:${(p.color || '#22d3ee')}40;">
+          <div class="phase-row-left">
+            <span class="phase-drag-handle" title="Ziehen, um Reihenfolge zu ändern" aria-hidden="true">
+              <span class="material-symbols-rounded">drag_indicator</span>
+            </span>
+            <div class="phase-name" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.name}</div>
+          </div>
           <div style="display:flex;gap:6px;justify-content:flex-end; flex-shrink:0;">
             <button class="icon-action" aria-label="Bearbeiten" data-edit-phase="${p.id}"><span class="material-symbols-rounded">edit</span></button>
             <button class="icon-action danger" aria-label="Loeschen" data-delete-phase="${p.id}"><span class="material-symbols-rounded">delete</span></button>
@@ -1001,6 +1041,49 @@ const params = new URLSearchParams(window.location.search);
         const id = Number(delBtn.dataset.deletePhase);
         deletePhase(id);
       }
+    });
+
+    // Drag & drop for reordering phases in settings
+    phaseRows.addEventListener('dragstart', (e) => {
+      const row = e.target.closest('.phase-row[draggable="true"]');
+      if (!row) return;
+      phaseListDragId = Number(row.dataset.phaseId);
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+
+    phaseRows.addEventListener('dragend', () => {
+      phaseListDragId = null;
+      phaseRows.querySelectorAll('.phase-row').forEach(r => r.classList.remove('drag-over', 'dragging'));
+    });
+
+    phaseRows.addEventListener('dragover', (e) => {
+      const row = e.target.closest('.phase-row[draggable="true"]');
+      if (!row || phaseListDragId === null) return;
+      e.preventDefault();
+      row.classList.add('drag-over');
+    });
+
+    phaseRows.addEventListener('dragleave', (e) => {
+      const row = e.target.closest('.phase-row[draggable="true"]');
+      if (row) row.classList.remove('drag-over');
+    });
+
+    phaseRows.addEventListener('drop', async (e) => {
+      const target = e.target.closest('.phase-row[draggable="true"]');
+      if (!target || phaseListDragId === null) return;
+      e.preventDefault();
+      const rows = Array.from(phaseRows.querySelectorAll('.phase-row[draggable="true"]'));
+      const orderedIds = rows.map(r => Number(r.dataset.phaseId));
+      const dragIndex = orderedIds.indexOf(phaseListDragId);
+      const targetIndex = orderedIds.indexOf(Number(target.dataset.phaseId));
+      if (dragIndex > -1 && targetIndex > -1 && dragIndex !== targetIndex) {
+        orderedIds.splice(dragIndex, 1);
+        orderedIds.splice(targetIndex, 0, phaseListDragId);
+        await updatePhaseSequence(orderedIds);
+      }
+      phaseListDragId = null;
+      rows.forEach(r => r.classList.remove('drag-over', 'dragging'));
     });
 
     function loadPhaseIntoForm(id) {
@@ -2252,11 +2335,20 @@ async function exportChartAsPng() {
 
     phaseForm.addEventListener('submit', async (evt) => {
       evt.preventDefault();
+      const isEdit = !!phaseIdInput.value;
+      const existing = isEdit ? phases.find(p => p.id === Number(phaseIdInput.value)) : null;
+      const nextSortIndex = (() => {
+        if (existing && Number.isFinite(Number(existing.sortIndex))) return Number(existing.sortIndex);
+        if (!phases.length) return 0;
+        const max = Math.max(...phases.map(p => Number.isFinite(Number(p.sortIndex)) ? Number(p.sortIndex) : 0));
+        return max + 1;
+      })();
       const payload = {
         name: phaseNameInput.value.trim(),
         description: phaseDescInput.value.trim(),
         color: sanitizeColor(phaseColorInput.value),
-        projectId
+        projectId,
+        sortIndex: nextSortIndex
       };
       if (!payload.name) {
         setStatus('Phasenname darf nicht leer sein.', true);
