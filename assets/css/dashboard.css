@@ -297,6 +297,24 @@ table { margin-top: 10px; }
 .phase-row:hover { background: rgba(37, 99, 235, 0.05); }
 .phase-row .phase-name { font-size: 15px; }
 
+.phase-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.phase-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: rgba(15, 23, 42, 0.55);
+  cursor: grab;
+  transition: background 140ms ease, color 140ms ease;
+  flex-shrink: 0;
+}
+.phase-row:hover .phase-drag-handle { background: rgba(37, 99, 235, 0.08); color: rgba(15, 23, 42, 0.85); }
+.phase-drag-handle:active { cursor: grabbing; }
+.phase-row.dragging { opacity: 0.65; }
+.phase-row.drag-over { outline: 2px dashed rgba(37, 99, 235, 0.45); outline-offset: -6px; }
+
 .check-row {
   flex-direction: row;
   align-items: center;
