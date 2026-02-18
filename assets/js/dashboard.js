@@ -1023,6 +1023,21 @@ const params = new URLSearchParams(window.location.search);
       }
     });
 
+    // Action buttons in "Nach Phase" view
+    phaseView?.addEventListener('click', (e) => {
+      const editBtn = e.target.closest('[data-edit]');
+      const delBtn = e.target.closest('[data-delete]');
+      if (!editBtn && !delBtn) return;
+      const id = Number(editBtn?.dataset.edit || delBtn?.dataset.delete);
+      if (Number.isNaN(id)) return;
+      if (editBtn) {
+        const pkg = packages.find(p => p.id === id);
+        if (pkg) openModal(pkg, 'edit');
+      } else if (delBtn) {
+        deletePackage(id);
+      }
+    });
+
     phaseRows.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-edit-phase]');
       const delBtn = e.target.closest('[data-delete-phase]');
@@ -1921,12 +1936,15 @@ const params = new URLSearchParams(window.location.search);
       const totalPlanned = packages.reduce((s,p)=> s + (Number(p.time)||0), 0);
 
       // Same basis wie Burndown: actual = fertig, ideal = Kapazitätstage
+      // Zähle erledigte Stunden bis heute. Wenn kein doneDate hinterlegt ist (Alt-Daten),
+      // wird der Abschluss auf "heute" gesetzt, damit fertig markierte Pakete nicht
+      // erst am geplanten Enddatum zählen.
       const completedPlannedHours = planCache
-        .filter(p => (p.status || 'Backlog') === 'Finished' && (
-          (p.doneDate && p.doneDate.slice(0,10) <= todayStr) ||
-          (!p.doneDate && p.end <= today)
-        ))
-        .reduce((s,p)=> s + (Number(p.hours)||0), 0);
+        .filter(p => (p.status || 'Backlog') === 'Finished')
+        .reduce((s, p) => {
+          const done = p.doneDate ? new Date(p.doneDate) : today;
+          return done <= today ? s + (Number(p.hours) || 0) : s;
+        }, 0);
 
       // Ideal verbleibend heute basierend auf Wochenkapazität
       let idealRemaining = totalPlanned;
