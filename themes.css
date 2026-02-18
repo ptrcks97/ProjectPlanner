@@ -103,3 +103,104 @@
   min-width: 960px; /* adjust to your chart's natural width */
   width: max-content;
 }
+
+/* Akzeptanzkriterien */
+.criteria-block {
+  border: 1px solid var(--border, rgba(255,255,255,0.08));
+  border-radius: 10px;
+  padding: 10px;
+  margin: 10px 0 6px;
+  background: var(--card, #0f172a);
+}
+.criteria-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.criteria-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.criteria-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.criteria-row input[type="text"] {
+  flex: 1;
+}
+.criteria-checklist {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-auto-rows: auto;
+  gap: 14px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: #fbfcff;
+}
+.criteria-check {
+  display: contents;
+}
+.criteria-check input {
+  width: 16px;
+  height: 16px;
+  border-radius: 12px;
+  border: 2px solid rgba(15, 58, 77, 0.4);
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 180ms ease-in-out, box-shadow 180ms ease-in-out, background 180ms ease-in-out, border-color 180ms ease-in-out;
+}
+.criteria-check input {
+  grid-column: 1;
+}
+.criteria-check span {
+  grid-column: 2;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--text, #0f172a);
+  display: inline-flex;
+  align-items: center;
+}
+.criteria-check input:checked {
+  background: #0f3a4d;
+  border-color: #0f3a4d;
+  box-shadow:
+    0 4px 12px rgba(15,58,77,0.22),
+    0 0 0 2px rgba(15,58,77,0.12);
+}
+.criteria-check input:checked::after {
+  content: '';
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg);
+  margin-top: -1px;
+}
+.criteria-check input:active {
+  transform: scale(1.05);
+}
+.criteria-check input:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(14,165,233,0.22),
+    inset 0 1px 2px rgba(15,23,42,0.10);
+}
+.criteria-check input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: inset 0 1px 1px rgba(15,23,42,0.06);
+  background: #f5f7fa;
+}
+.criteria-check span {
+  line-height: 1.45;
+}

@@ -140,6 +140,15 @@
             <label>Beschreibung
               <textarea id="inline-task-desc" rows="3"></textarea>
             </label>
+            <div class="criteria-block">
+              <div class="criteria-head">
+                <span>Akzeptanzkriterien</span>
+                <button type="button" class="icon-square ghost" id="inline-criteria-add" title="Kriterium hinzufügen">
+                  <span class="material-symbols-rounded">add</span>
+                </button>
+              </div>
+              <div id="inline-criteria-list" class="criteria-list"></div>
+            </div>
             <label>Status
               <select id="inline-task-status">
                 <option value="Backlog">Backlog</option>
@@ -409,6 +418,15 @@
         <label>Beschreibung
           <textarea id="task-desc" rows="3"></textarea>
         </label>
+        <div class="criteria-block">
+          <div class="criteria-head">
+            <span>Akzeptanzkriterien</span>
+            <button type="button" class="icon-square ghost" id="task-criteria-add" title="Kriterium hinzufügen">
+              <span class="material-symbols-rounded">add</span>
+            </button>
+          </div>
+          <div id="task-criteria-list" class="criteria-list"></div>
+        </div>
         <label>Status
           <select id="task-status">
             <option value="Backlog">Backlog</option>
@@ -458,6 +476,10 @@
         <div>
           <div class="muted">Beschreibung</div>
           <p id="detail-desc" class="detail-desc">-</p>
+        </div>
+        <div>
+          <div class="muted">Akzeptanzkriterien</div>
+          <div id="detail-criteria" class="criteria-checklist muted">-</div>
         </div>
         <div class="detail-stats">
           <div class="stat">

@@ -92,6 +92,10 @@ const params = new URLSearchParams(window.location.search);
     const taskStatus = document.getElementById('task-status');
     const taskParallel = document.getElementById('task-parallel');
     const taskSpread = document.getElementById('task-spread');
+    const criteriaList = document.getElementById('task-criteria-list');
+    const criteriaAddBtn = document.getElementById('task-criteria-add');
+    const inlineCriteriaList = document.getElementById('inline-criteria-list');
+    const inlineCriteriaAddBtn = document.getElementById('inline-criteria-add');
     const closeModalBtn = document.getElementById('close-modal');
     const cancelModalBtn = document.getElementById('cancel-modal');
 
@@ -109,6 +113,7 @@ const params = new URLSearchParams(window.location.search);
     const detailId = document.getElementById('detail-id');
     const detailParallel = document.getElementById('detail-parallel');
     const detailSpread = document.getElementById('detail-spread');
+    const detailCriteria = document.getElementById('detail-criteria');
     // inline task form
     const inlineTaskForm = document.getElementById('inline-task-form');
     const inlineTaskPhase = document.getElementById('inline-task-phase');
@@ -369,8 +374,79 @@ const params = new URLSearchParams(window.location.search);
       if (!res.ok) return;
       const arr = await res.json();
       const phaseIds = new Set(phases.map(p => p.id));
-      packages = arr.filter(w => w.projectId === projectId || phaseIds.has(w.phaseId));
+      packages = arr
+        .filter(w => w.projectId === projectId || phaseIds.has(w.phaseId))
+        .map(w => ({
+          ...w,
+          acceptanceCriteria: Array.isArray(w.acceptanceCriteria)
+            ? w.acceptanceCriteria.map(c => ({ text: (c.text || '').trim(), done: !!c.done }))
+            : []
+        }));
       renderJournalPackageOptions();
+    }
+
+    /* ---------- Akzeptanzkriterien ---------- */
+    function normalizeCriteria(list) {
+      if (!Array.isArray(list)) return [];
+      return list
+        .map(c => ({ text: (c.text || '').trim(), done: !!c.done }))
+        .filter(c => c.text.length);
+    }
+
+    function addCriteriaRow(text = '', done = false, target = criteriaList) {
+      if (!target) return;
+      const row = document.createElement('div');
+      row.className = 'criteria-row';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'criteria-input';
+      input.placeholder = 'Akzeptanzkriterium';
+      input.value = text;
+      input.dataset.done = done ? 'true' : 'false';
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'icon-square ghost criteria-remove';
+      removeBtn.title = 'Entfernen';
+      removeBtn.innerHTML = '<span class="material-symbols-rounded">close</span>';
+      removeBtn.addEventListener('click', () => row.remove());
+      row.append(input, removeBtn);
+      target.appendChild(row);
+    }
+
+    function resetCriteriaForm(criteria = [], target = criteriaList) {
+      if (!target) return;
+      target.innerHTML = '';
+      const list = normalizeCriteria(criteria);
+      if (!list.length) {
+        addCriteriaRow('', false, target);
+      } else {
+        list.forEach(c => addCriteriaRow(c.text, c.done, target));
+      }
+    }
+
+    function collectCriteriaFromForm(target = criteriaList) {
+      const rows = Array.from(target?.querySelectorAll('.criteria-input') || []);
+      return rows
+        .map(inp => ({ text: inp.value.trim(), done: inp.dataset.done === 'true' }))
+        .filter(c => c.text.length);
+    }
+
+    function renderDetailCriteria(pkg) {
+      if (!detailCriteria) return;
+      const list = normalizeCriteria(pkg?.acceptanceCriteria);
+      if (!list.length) {
+        detailCriteria.innerHTML = '<span class="muted">Keine Akzeptanzkriterien definiert.</span>';
+        return;
+      }
+      detailCriteria.innerHTML = list.map((c, idx) => {
+        const safe = (c.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return `
+        <label class="criteria-check" data-idx="${idx}">
+          <input type="checkbox" ${c.done ? 'checked' : ''}>
+          <span>${safe}</span>
+        </label>
+      `;
+      }).join('');
     }
 
     /* ---------- Arbeitsjournal ---------- */
@@ -910,6 +986,40 @@ const params = new URLSearchParams(window.location.search);
       }
     }, { passive: false });
 
+    detailCriteria?.addEventListener('change', async (e) => {
+      const checkbox = e.target.closest('input[type="checkbox"]');
+      const row = e.target.closest('.criteria-check');
+      if (!checkbox || !row) return;
+      const idx = Number(row.dataset.idx);
+      const id = Number(detailId?.textContent);
+      const pkg = packages.find(p => p.id === id);
+      if (!pkg || Number.isNaN(idx)) return;
+      const list = normalizeCriteria(pkg.acceptanceCriteria);
+      if (idx < 0 || idx >= list.length) return;
+      list[idx].done = checkbox.checked;
+      pkg.acceptanceCriteria = list;
+      try {
+        await persistPackage(pkg);
+        const allDone = list.length > 0 && list.every(c => c.done);
+        if (allDone && (pkg.status || 'Backlog') !== 'Finished') {
+          const confirmFinish = window.confirm('Du hast alle Kriterien erfüllt, willst du das Paket auf Finished setzen?');
+          if (confirmFinish) {
+            pkg.status = 'Finished';
+            await persistPackage(pkg);
+          }
+        }
+        await refreshPlan();
+        // Paket kann nach refresh ersetzt sein, hole es neu
+        const updated = packages.find(p => p.id === id) || pkg;
+        renderDetailCriteria(updated);
+        detailStatus.innerHTML = statusChip(updated.status || 'ToDo');
+        detailStatusPlain.textContent = statusLabel(updated.status);
+      } catch (err) {
+        setStatus('Speichern fehlgeschlagen (' + err.message + ').', true);
+        checkbox.checked = !checkbox.checked;
+      }
+    });
+
     async function updatePhaseOrder(phaseId, orderedIds) {
       for (let i=0;i<orderedIds.length;i++){
         const id = orderedIds[i];
@@ -1171,6 +1281,20 @@ const params = new URLSearchParams(window.location.search);
       }
     }
 
+    async function persistPackage(pkg) {
+      const body = { ...pkg };
+      if ((body.status || 'Backlog') === 'Finished') {
+        body.doneDate = body.doneDate || new Date().toISOString();
+      } else {
+        body.doneDate = null;
+      }
+      const res = await apiRequest(`/workPackages/${pkg.id}`, {
+        method: 'PUT',
+        body
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    }
+
     function openModal(pkg, mode = 'edit') {
       editingId = mode === 'edit' ? pkg.id : null;
       modalMode.textContent = mode === 'edit' ? 'Arbeitspaket bearbeiten' : 'Arbeitspaket erstellen';
@@ -1183,6 +1307,7 @@ const params = new URLSearchParams(window.location.search);
       taskTime.value = pkg?.time ?? 0;
       const selectedPhase = pkg?.phaseId ?? '';
       taskPhase.innerHTML = `<option value="">(keine Phase)</option>` + phases.map(p => `<option value="${p.id}" ${p.id === selectedPhase ? 'selected' : ''}>${p.name}</option>`).join('');
+      resetCriteriaForm(pkg?.acceptanceCriteria || []);
       modal.classList.remove('hidden');
     }
 
@@ -1212,6 +1337,7 @@ const params = new URLSearchParams(window.location.search);
       detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
       detailStatusPlain.textContent = statusLabel(pkg.status);
       detailHours.textContent = `${pkg.time ?? '-'} h`;
+      renderDetailCriteria(pkg);
       const sched = planCache.find(p => p.id === pkg.id);
       detailStart.textContent = sched?.start ? sched.start.toLocaleDateString('de-CH') : '-';
       detailEnd.textContent = sched?.end ? sched.end.toLocaleDateString('de-CH') : '-';
@@ -1391,7 +1517,18 @@ const params = new URLSearchParams(window.location.search);
     async function updateKanbanStatus(id, status) {
       const pkg = packages.find(p => p.id === id);
       if (!pkg) return;
-      const body = { ...pkg, status };
+      let criteria = normalizeCriteria(pkg.acceptanceCriteria);
+      if (status === 'Finished' && criteria.some(c => !c.done)) {
+        const confirmFinish = window.confirm('Nicht alle Akzeptanzkriterien sind erledigt. Willst du alle als erledigt markieren und abschliessen?');
+        if (!confirmFinish) return;
+        criteria = criteria.map(c => ({ ...c, done: true }));
+      }
+      const body = {
+        ...pkg,
+        status,
+        acceptanceCriteria: criteria,
+        doneDate: status === 'Finished' ? (pkg.doneDate || new Date().toISOString()) : null
+      };
       const res = await apiRequest(`/workPackages/${id}`, {
         method: 'PUT',
         body
@@ -2220,6 +2357,10 @@ async function exportChartAsPng() {
     closeModalBtn.addEventListener('click', closeModal);
     cancelModalBtn.addEventListener('click', closeModal);
 
+    criteriaAddBtn?.addEventListener('click', () => addCriteriaRow());
+    inlineCriteriaAddBtn?.addEventListener('click', () => addCriteriaRow('', false, inlineCriteriaList));
+    resetCriteriaForm([], inlineCriteriaList);
+
     taskForm.addEventListener('submit', async (evt) => {
       evt.preventDefault();
       const payload = {
@@ -2230,7 +2371,8 @@ async function exportChartAsPng() {
         time: Number(taskTime.value),
         status: taskStatus.value || 'Backlog',
         parallel: taskParallel.checked,
-        spread: taskSpread.checked
+        spread: taskSpread.checked,
+        acceptanceCriteria: collectCriteriaFromForm()
       };
       if (!payload.name) {
         setStatus('Name darf nicht leer sein.', true);
@@ -2240,6 +2382,25 @@ async function exportChartAsPng() {
         setStatus('Bitte gueltige Stunden angeben.', true);
         return;
       }
+      const hasCriteria = payload.acceptanceCriteria.length > 0;
+      const allCriteriaDone = payload.acceptanceCriteria.every(c => c.done);
+      if (payload.status === 'Finished' && hasCriteria && !allCriteriaDone) {
+        const confirmFinish = window.confirm('Nicht alle Akzeptanzkriterien sind erledigt. Willst du alle als erledigt markieren und abschliessen?');
+        if (confirmFinish) {
+          payload.acceptanceCriteria = payload.acceptanceCriteria.map(c => ({ ...c, done: true }));
+        } else {
+          setStatus('Speichern abgebrochen, offene Akzeptanzkriterien.', true);
+          return;
+        }
+      }
+      if (payload.status !== 'Finished' && hasCriteria && allCriteriaDone) {
+        const confirmAutoFinish = window.confirm('Du hast alle Kriterien erfüllt, Paket auf Finished setzen?');
+        if (confirmAutoFinish) {
+          payload.status = 'Finished';
+          taskStatus.value = 'Finished';
+        }
+      }
+
       try {
         if (editingId) {
           const existing = packages.find(p => p.id === editingId);
@@ -2582,7 +2743,8 @@ async function exportChartAsPng() {
         status: inlineTaskStatus.value || 'Backlog',
         parallel: inlineTaskParallel.checked,
         spread: inlineTaskSpread.checked,
-        time: Number(inlineTaskTime.value)
+        time: Number(inlineTaskTime.value),
+        acceptanceCriteria: collectCriteriaFromForm(inlineCriteriaList)
       };
       if (!payload.name) { setStatus('Bitte Aufgabennamen angeben.', true); return; }
       if (Number.isNaN(payload.time)) { setStatus('Bitte Stunden angeben.', true); return; }
