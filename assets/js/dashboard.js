@@ -1,6 +1,13 @@
 import { apiRequest } from './dashboard/api.js';
 import { fmt, isoWeek, startOfWeek, statusChip } from './dashboard/utils.js';
 import { cleanDB } from './clean-db.js';
+import { HELP_COPY, CHART_TYPES, KANBAN_LABELS, PW_COLOR } from './dashboard/constants.js';
+import { normalizeCriteria, addCriteriaRow, resetCriteriaForm, collectCriteriaFromForm, renderDetailCriteria } from './dashboard/criteria.js';
+import { computeSchedule, filterPlan, comparePhases } from './dashboard/schedule.js';
+import { renderPlanTable, renderPhaseGrouped } from './dashboard/plan-renderers.js';
+import { loadJournalEntries, persistJournalEntries, renderJournal as renderJournalTable, setJournalToday, setJournalStatus, exportCSV, exportMarkdown, exportPDF } from './dashboard/journal.js';
+import { renderKanbanPhaseOptions as renderKanbanPhaseOptionsMod, renderKanbanBoard as renderKanbanBoardMod } from './dashboard/kanban.js';
+import { blobToDataUrl } from './dashboard/download.js';
 
 const params = new URLSearchParams(window.location.search);
     const projectId = Number(params.get('id'));
@@ -41,7 +48,7 @@ const params = new URLSearchParams(window.location.search);
     const chartNext = document.getElementById('chart-next');
     const chartLabel = document.getElementById('chart-label');
     const chartImageExportBtn = document.getElementById('chart-export-img');
-    const chartTypes = ['health', 'gantt', 'phasegantt', 'pie', 'bar', 'burndown'];
+    const chartTypes = CHART_TYPES;
     const chartZoomBtn = document.getElementById('chart-zoom');
     let isZoomed = false;
     let chartIndex = 0;
@@ -69,6 +76,8 @@ const params = new URLSearchParams(window.location.search);
     const journalSumCell = document.getElementById('journal-sum');
     const downloadToggle = document.getElementById('download-toggle');
     const downloadPanel = document.getElementById('download-panel');
+    const journalDom = { journalRows, journalCount, journalTotal, journalSumCell, journalStatus };
+    const showJournalStatus = (text, isError = false) => setJournalStatus(journalDom, text, isError);
 
     // Forecast view
     const forecastRows = document.getElementById('forecast-rows');
@@ -78,7 +87,6 @@ const params = new URLSearchParams(window.location.search);
     const forecastCardDays = document.getElementById('forecast-days-total');
     const forecastCardEnd = document.getElementById('forecast-end-date');
     const forecastCardWeek = document.getElementById('forecast-week-avg');
-    const JOURNAL_KEY_PREFIX = 'work-journal-project-';
     let journalEntries = [];
     let journalEditIndex = null;
 
@@ -207,74 +215,7 @@ const params = new URLSearchParams(window.location.search);
     let startStr = null;
     let planCache = [];
     let filterMode = 'all';
-
-    const KANBAN_STATUSES = ['Backlog', 'ToDo', 'Warten', 'OnHold', 'Finished'];
-    const KANBAN_LABELS = {
-      Backlog: 'Backlog',
-      ToDo: 'To Do',
-      Warten: 'Warten',
-      OnHold: 'On Hold',
-      Finished: 'Finished'
-    };
-    const KANBAN_COLOR = {
-      Backlog: '#64748b',
-      ToDo: '#22d3ee',
-      Warten: '#f59e0b',
-      OnHold: '#ef4444',
-      Finished: '#22c55e'
-    };
-    const HELP_COPY = {
-      plan: {
-        title: 'Plan',
-        body: 'Zeitplan aller Arbeitspakete in Reihenfolge. Filtere nach Heute/Woche/Monat und bearbeite über die Stift-Icons.',
-        bullets: [
-          'Parallel/Projektweit markierte Pakete behalten ihre Logik im Plan.',
-          'Exports: Diagramme im Tab „Diagramme“ (Bild/PDF) erstellen.',
-          'Arbeitsjournal-Exports (CSV, Markdown, PDF) unter „Arbeitsjournal“.'
-        ]
-      },
-      phase: {
-        title: 'Nach Phase',
-        body: 'Arbeitspakete gruppiert nach Phase, per Drag & Drop innerhalb einer Phase neu sortieren.',
-        bullets: [
-          'Ausrufezeichen bedeutet: Paket ohne Phase.',
-          'Exports wie oben über „Diagramme“ bzw. „Arbeitsjournal“.'
-        ]
-      },
-      chart: {
-        title: 'Diagramme',
-        body: 'Blättere mit < und > durch Gantt, Phasen-Gantt, Pie, Bar, Burndown. Volle Breite per „Fullscreen“.',
-        bullets: [
-          'Bild Export: Button rechts (PNG).',
-          'PDF: „Bild Export“ + PDF-Export-Button, mehrere Charts werden gesammelt.',
-          'Fullscreen blendet die Hilfe aus; mit „Schliessen“ zurück.'
-        ]
-      },
-      forecast: {
-        title: 'Vorhersage',
-        body: 'Theoretischer Plan ab heute mit allen offenen Paketen. Daten bleiben unverändert.',
-        bullets: [
-          'Nutze, um schnell das erwartete Enddatum zu sehen.',
-          'Exports: wechsle zu „Diagramme“ für Bild/PDF; Journal-Exports wie gewohnt.'
-        ]
-      },
-      journal: {
-        title: 'Arbeitsjournal',
-        body: 'Zeiterfassung pro Tag. Pakete optional zuordenbar.',
-        bullets: [
-          'Download-Menü: CSV (voll/reduced), Markdown, PDF/Screenshot.',
-          'Bearbeiten/Löschen direkt in der Tabelle.'
-        ]
-      },
-      kanban: {
-        title: 'Kanban',
-        body: 'Statusbasierte Übersicht für die ausgewählte Phase. Karten per Drag & Drop verschieben.',
-        bullets: [
-          'Statuswechsel aktualisiert den Plan automatisch.',
-          'Exports: Diagramme & Journal wie oben.'
-        ]
-      }
-    };
+    const aggregatedPlan = () => filterPlan(planCache, filterMode);
 
     if (projectId) back.href = `index.html`;
 
@@ -347,13 +288,6 @@ const params = new URLSearchParams(window.location.search);
       }
     }
 
-    function comparePhases(a, b) {
-      const ai = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number(a.id ?? 0);
-      const bi = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number(b.id ?? 0);
-      if (ai !== bi) return ai - bi;
-      return (a.id ?? 0) - (b.id ?? 0);
-    }
-
     async function loadPhases() {
       const res = await apiRequest(`/phases?projectId=${projectId}`);
       if (!res.ok) return;
@@ -385,75 +319,7 @@ const params = new URLSearchParams(window.location.search);
       renderJournalPackageOptions();
     }
 
-    /* ---------- Akzeptanzkriterien ---------- */
-    function normalizeCriteria(list) {
-      if (!Array.isArray(list)) return [];
-      return list
-        .map(c => ({ text: (c.text || '').trim(), done: !!c.done }))
-        .filter(c => c.text.length);
-    }
-
-    function addCriteriaRow(text = '', done = false, target = criteriaList) {
-      if (!target) return;
-      const row = document.createElement('div');
-      row.className = 'criteria-row';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'criteria-input';
-      input.placeholder = 'Akzeptanzkriterium';
-      input.value = text;
-      input.dataset.done = done ? 'true' : 'false';
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'icon-square ghost criteria-remove';
-      removeBtn.title = 'Entfernen';
-      removeBtn.innerHTML = '<span class="material-symbols-rounded">close</span>';
-      removeBtn.addEventListener('click', () => row.remove());
-      row.append(input, removeBtn);
-      target.appendChild(row);
-    }
-
-    function resetCriteriaForm(criteria = [], target = criteriaList) {
-      if (!target) return;
-      target.innerHTML = '';
-      const list = normalizeCriteria(criteria);
-      if (!list.length) {
-        addCriteriaRow('', false, target);
-      } else {
-        list.forEach(c => addCriteriaRow(c.text, c.done, target));
-      }
-    }
-
-    function collectCriteriaFromForm(target = criteriaList) {
-      const rows = Array.from(target?.querySelectorAll('.criteria-input') || []);
-      return rows
-        .map(inp => ({ text: inp.value.trim(), done: inp.dataset.done === 'true' }))
-        .filter(c => c.text.length);
-    }
-
-    function renderDetailCriteria(pkg) {
-      if (!detailCriteria) return;
-      const list = normalizeCriteria(pkg?.acceptanceCriteria);
-      if (!list.length) {
-        detailCriteria.innerHTML = '<span class="muted">Keine Akzeptanzkriterien definiert.</span>';
-        return;
-      }
-      detailCriteria.innerHTML = list.map((c, idx) => {
-        const safe = (c.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        return `
-        <label class="criteria-check" data-idx="${idx}">
-          <input type="checkbox" ${c.done ? 'checked' : ''}>
-          <span>${safe}</span>
-        </label>
-      `;
-      }).join('');
-    }
-
     /* ---------- Arbeitsjournal ---------- */
-    function journalKey() {
-      return `${JOURNAL_KEY_PREFIX}${projectId || 'unknown'}`;
-    }
-
     function renderJournalPhaseOptions() {
       if (!journalPhaseSelect) return;
       if (!phases.length) {
@@ -486,54 +352,16 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function loadJournal() {
-      const raw = localStorage.getItem(journalKey());
-      journalEntries = raw ? JSON.parse(raw) : [];
-      renderJournal();
+      journalEntries = loadJournalEntries(projectId);
+      renderJournalTable(journalEntries, journalDom);
     }
 
     function persistJournal() {
-      localStorage.setItem(journalKey(), JSON.stringify(journalEntries));
+      persistJournalEntries(projectId, journalEntries);
     }
 
     function renderJournal() {
-      if (!journalRows) return;
-      if (!journalEntries.length) {
-        journalRows.innerHTML = '<tr><td colspan="7">Noch keine Einträge.</td></tr>';
-        journalCount.textContent = '0';
-        journalTotal.textContent = '0.00 h';
-        if (journalSumCell) journalSumCell.textContent = '0.00';
-        return;
-      }
-      journalRows.innerHTML = journalEntries.map((entry, idx) => `
-        <tr>
-          <td>${entry.title}</td>
-          <td>${entry.description}</td>
-          <td><span class="chip">${entry.phase || '-'}</span></td>
-          <td>${entry.packageName || '-'}</td>
-          <td>${entry.hours}</td>
-          <td>${entry.date}</td>
-          <td>
-            <button class="ghost" data-edit-journal="${idx}">Bearbeiten</button>
-            <button class="ghost" data-remove="${idx}" style="margin-left:6px;">Löschen</button>
-          </td>
-        </tr>
-      `).join('');
-      journalCount.textContent = journalEntries.length;
-      const total = journalEntries.reduce((sum, e) => sum + Number(e.hours || 0), 0);
-      journalTotal.textContent = `${total.toFixed(2)} h`;
-      if (journalSumCell) journalSumCell.textContent = total.toFixed(2);
-    }
-
-    function setJournalStatus(text, isError = false) {
-      if (!journalStatus) return;
-      journalStatus.textContent = text;
-      journalStatus.classList.toggle('error', isError);
-    }
-
-    function setJournalToday() {
-      if (!journalDate) return;
-      const today = new Date().toISOString().split('T')[0];
-      journalDate.value = today;
+      renderJournalTable(journalEntries, journalDom);
     }
 
     /* ---------- Exporte ---------- */
@@ -543,264 +371,7 @@ const params = new URLSearchParams(window.location.search);
       downloadPanel.classList.toggle('hidden', !shouldShow);
     }
 
-    function downloadFile(filename, mime, content) {
-      const blob = new Blob([content], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    function exportCSV(reduced = false) {
-      const header = reduced
-        ? ['Titel', 'Beschreibung', 'Datum', 'Stunden']
-        : ['Titel', 'Beschreibung', 'Phase', 'Arbeitspaket', 'Stunden', 'Datum'];
-      const rows = journalEntries.map(e => reduced
-        ? [
-            e.title,
-            (e.description || '').replace(/"/g, '""'),
-            e.date,
-            e.hours
-          ]
-        : [
-            e.title,
-            (e.description || '').replace(/"/g, '""'),
-            e.phase || '',
-            e.packageName || '',
-            e.hours,
-            e.date
-          ]);
-      const lines = [header.join(';'), ...rows.map(r => r.map(v => `"${String(v ?? '')}"`).join(';'))];
-      // prepend BOM for Excel UTF-8
-      const bom = new Uint8Array([0xEF,0xBB,0xBF]);
-      const csv = lines.join('\n');
-      const blob = new Blob([bom, csv], { type: 'text/csv;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `journal-${projectId || 'projekt'}${reduced ? '-reduced' : ''}.csv`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
-    }
-
-    function exportPDF() {
-      // Create a printable window that user can save as PDF
-      const win = window.open('', '_blank', 'width=900,height=1200');
-      if (!win) { setJournalStatus('Popup blockiert – bitte erlauben.', true); return; }
-      const style = `
-        <style>
-          body { font-family: "Space Grotesk", Helvetica, sans-serif; padding: 20px; background:#0b1224; color:#e2e8f0; }
-          h1 { margin-top:0; }
-          table { width:100%; border-collapse:collapse; margin-top:12px; }
-          th, td { border:1px solid #233041; padding:10px; font-size:13px; }
-          th { background:#0ea5e9; color:#0b1224; }
-          .chip { padding:3px 8px; border-radius:10px; background:#122033; color:#e2e8f0; border:1px solid #1f2c3f; }
-        </style>`;
-      const rows = journalEntries.map(e => `
-        <tr>
-          <td>${e.title}</td>
-          <td>${e.description}</td>
-          <td><span class="chip">${e.phase || ''}</span></td>
-          <td>${e.packageName || ''}</td>
-          <td>${e.hours}</td>
-          <td>${e.date}</td>
-        </tr>`).join('');
-      const html = `
-        <html><head>${style}</head><body>
-          <h1>Arbeitsjournal Projekt ${projectId ?? ''}</h1>
-          <div>Einträge: ${journalEntries.length} | Gesamtstunden: ${journalTotal?.textContent ?? ''}</div>
-          <table>
-            <thead>
-              <tr><th>Kurz</th><th>Beschreibung</th><th>Phase</th><th>Arbeitspaket</th><th>Stunden</th><th>Datum</th></tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <script>window.onload = () => { window.print(); setTimeout(() => window.close(), 300); };<\/script>
-        </body></html>`;
-      win.document.write(html);
-      win.document.close();
-    }
-
-    function exportMarkdown() {
-      const lines = [
-        `# Arbeitsjournal Projekt ${projectId ?? ''}`,
-        '',
-        `Gesamt: ${journalTotal?.textContent ?? ''}`,
-        ''
-      ];
-      lines.push('| Kurz | Beschreibung | Phase | Arbeitspaket | Stunden | Datum |');
-      lines.push('| --- | --- | --- | --- | --- | --- |');
-      journalEntries.forEach(e => {
-        lines.push(`| ${e.title} | ${(e.description || '').replace(/\\n/g, ' ')} | ${e.phase || ''} | ${e.packageName || ''} | ${e.hours} | ${e.date} |`);
-      });
-      downloadFile(`journal-${projectId || 'projekt'}.md`, 'text/markdown;charset=utf-8', lines.join('\\n'));
-    }
-
-    function computeSchedule({ startDate, weekly, phases, packages }) {
-      const weeklyMap = {
-        1: weekly?.monday ?? 0,
-        2: weekly?.tuesday ?? 0,
-        3: weekly?.wednesday ?? 0,
-        4: weekly?.thursday ?? 0,
-        5: weekly?.friday ?? 0,
-        6: weekly?.saturday ?? 0,
-        0: weekly?.sunday ?? 0
-      };
-      const weeklyTotal = Object.values(weeklyMap).reduce((s, h) => s + (Number(h) || 0), 0);
-      if (weeklyTotal <= 0) return { plan: [], totalHours: 0, days: 0 };
-
-      const orderedPhases = [...phases].sort(comparePhases);
-      const phaseOrder = orderedPhases.map(p => p.id);
-      const sortPackages = (list) => {
-        const copy = [...list];
-        copy.sort((a, b) => {
-          const ia = phaseOrder.indexOf(a.phaseId);
-          const ib = phaseOrder.indexOf(b.phaseId);
-          const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-          const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-          if (sa === sb) {
-            const si = (a.sortIndex ?? Number.MAX_SAFE_INTEGER);
-            const sj = (b.sortIndex ?? Number.MAX_SAFE_INTEGER);
-            if (si !== sj) return si - sj;
-            return (a.id ?? 0) - (b.id ?? 0);
-          }
-          return sa - sb;
-        });
-        return copy;
-      };
-
-      const tasks = sortPackages(packages);
-
-      function scheduleSequential(list, capTemplate) {
-        const plan = [];
-        let current = new Date(startDate);
-        const capMap = new Map(); // dateStr -> remaining hours
-        const capKey = (d) => new Date(d).toDateString();
-        const getCap = (d) => {
-          const k = capKey(d);
-          if (!capMap.has(k)) capMap.set(k, capTemplate[d.getDay()] ?? 0);
-          return capMap.get(k);
-        };
-        const setCap = (d, val) => capMap.set(capKey(d), val);
-        const moveToAvailableDay = (d) => {
-          let day = new Date(d);
-          while (getCap(day) <= 0) {
-            day.setDate(day.getDate() + 1);
-          }
-          return day;
-        };
-        current = moveToAvailableDay(current);
-
-        function scheduleBlock(totalHours) {
-          let datePtr = new Date(current);
-          let startAt = null;
-          let remaining = totalHours;
-          while (remaining > 0) {
-            datePtr = moveToAvailableDay(datePtr);
-            let cap = getCap(datePtr);
-            if (cap <= 0) { datePtr.setDate(datePtr.getDate() + 1); continue; }
-            if (!startAt) startAt = new Date(datePtr);
-            const consume = Math.min(remaining, cap);
-            cap -= consume;
-            setCap(datePtr, cap);
-            remaining -= consume;
-            if (remaining > 0) {
-              datePtr.setDate(datePtr.getDate() + 1);
-            }
-          }
-          const endAt = new Date(datePtr);
-          current = new Date(datePtr);
-          return { startAt, endAt };
-        }
-
-        for (let i = 0; i < list.length; i++) {
-          const pkg = list[i];
-          if (pkg.parallel) {
-            let groupHours = Number(pkg.time) || 0;
-            const group = [pkg];
-            let j = i + 1;
-            while (j < list.length && list[j].parallel) {
-              groupHours += Number(list[j].time) || 0;
-              group.push(list[j]);
-              j++;
-            }
-            const { startAt, endAt } = scheduleBlock(groupHours);
-            for (const g of group) {
-              plan.push({
-                id: g.id,
-                phaseId: g.phaseId,
-                name: g.name,
-                hours: g.time,
-                status: g.status || 'ToDo',
-                doneDate: g.doneDate,
-                start: new Date(startAt),
-                end: new Date(endAt),
-                parallel: !!g.parallel
-              });
-            }
-            i = j - 1;
-            continue;
-          }
-          const { startAt, endAt } = scheduleBlock(Number(pkg.time) || 0);
-          plan.push({
-            id: pkg.id,
-            phaseId: pkg.phaseId,
-            name: pkg.name,
-            hours: pkg.time,
-            status: pkg.status || 'ToDo',
-            doneDate: pkg.doneDate,
-            start: startAt,
-            end: endAt,
-            parallel: !!pkg.parallel
-          });
-        }
-
-        const maxEnd = plan.length ? new Date(Math.max(...plan.map(p => p.end))) : new Date(startDate);
-        const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
-        const totalHours = plan.reduce((s, p) => s + (Number(p.hours) || 0), 0);
-        return { plan, maxEnd, days: distinctDays, totalHours };
-      }
-
-      const { plan, days } = scheduleSequential(tasks, weeklyMap);
-      const totalHours = tasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
-
-      return { plan, totalHours, days };
-    }
-
-    function nextWorkDay(date, weeklyMap) {
-      const d = new Date(date);
-      const maxSearch = 365; // avoid infinite loop when no capacity
-      let tries = 0;
-      do {
-        d.setDate(d.getDate() + 1);
-        const hours = weeklyMap[d.getDay()] ?? 0;
-        if (hours > 0) return { date: d, hoursLeftToday: hours };
-        tries += 1;
-      } while (tries < maxSearch);
-      throw new Error('Keine verfuegbaren Kapazitaeten im Wochenplan.');
-    }
-
-    function filteredPlan() {
-      const now = new Date();
-      const todayStr = now.toISOString().slice(0,10);
-      const monday = startOfWeek(now);
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 0);
-      return planCache.filter(p => {
-        if (filterMode === 'all') return true;
-        const start = p.start.toISOString().slice(0,10);
-        if (filterMode === 'today') return start === todayStr;
-        if (filterMode === 'week') return p.start >= monday && p.start <= new Date(monday.getTime()+6*86400000);
-        if (filterMode === 'month') return p.start >= monthStart && p.start <= monthEnd;
-        return true;
-      });
-    }
-
-    function aggregatedPlan() {
-      return filteredPlan();
-    }
+    // computeSchedule, filterPlan imported from ./dashboard/schedule.js
 
     // Drag & drop within phase (Phase view)
     phaseView.addEventListener('dragstart', (e) => {
@@ -918,7 +489,7 @@ const params = new URLSearchParams(window.location.search);
         await refreshPlan();
         // Paket kann nach refresh ersetzt sein, hole es neu
         const updated = packages.find(p => p.id === id) || pkg;
-        renderDetailCriteria(updated);
+        renderDetailCriteria(updated, detailCriteria);
         detailStatus.innerHTML = statusChip(updated.status || 'ToDo');
         detailStatusPlain.textContent = statusLabel(updated.status);
       } catch (err) {
@@ -1216,7 +787,7 @@ const params = new URLSearchParams(window.location.search);
       taskTime.value = pkg?.time ?? 0;
       const selectedPhase = pkg?.phaseId ?? '';
       taskPhase.innerHTML = `<option value="">(keine Phase)</option>` + phases.map(p => `<option value="${p.id}" ${p.id === selectedPhase ? 'selected' : ''}>${p.name}</option>`).join('');
-      resetCriteriaForm(pkg?.acceptanceCriteria || []);
+      resetCriteriaForm(pkg?.acceptanceCriteria || [], criteriaList);
       modal.classList.remove('hidden');
     }
 
@@ -1245,7 +816,7 @@ const params = new URLSearchParams(window.location.search);
       detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
       detailStatusPlain.textContent = statusLabel(pkg.status);
       detailHours.textContent = `${pkg.time ?? '-'} h`;
-      renderDetailCriteria(pkg);
+      renderDetailCriteria(pkg, detailCriteria);
       const sched = planCache.find(p => p.id === pkg.id);
       detailStart.textContent = sched?.start ? sched.start.toLocaleDateString('de-CH') : '-';
       detailEnd.textContent = sched?.end ? sched.end.toLocaleDateString('de-CH') : '-';
@@ -1256,191 +827,27 @@ const params = new URLSearchParams(window.location.search);
       detailModal?.classList.add('hidden');
     }
 
-    function renderPlanTable() {
-      const resolvePhase = (pid) => {
-        if (pid === null || pid === undefined) return 'Ohne Phase';
-        const ph = phases.find(p => p.id === pid);
-        return ph ? ph.name : 'Ohne Phase';
-      };
-      const list = aggregatedPlan();
-      if (!list.length) {
-        rows.innerHTML = '<tr><td colspan="7">Keine Arbeitspakete vorhanden.</td></tr>';
-        return;
-      }
-      rows.innerHTML = list.map(p => {
-        const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
-        return `
-        <tr class="task-row" data-task-id="${p.id}">
-          <td>${resolvePhase(p.phaseId)}</td>
-          <td>${p.name} ${warn}</td>
-          <td>${statusChip(p.status || 'ToDo')}</td>
-          <td>${p.hours}</td>
-          <td>${fmt(p.start)}</td>
-          <td>${fmt(p.end)}</td>
-          <td>
-            <button class="icon-square" title="Bearbeiten" data-edit="${p.id}"><span class="material-symbols-rounded">edit</span></button>
-            <button class="icon-square danger" title="Loeschen" data-delete="${p.id}"><span class="material-symbols-rounded">delete</span></button>
-          </td>
-        </tr>
-      `;
-      }).join('');
-    }
+    const renderPlanTableView = () => {
+      renderPlanTable(aggregatedPlan(), phases, rows);
+    };
 
-    function renderPhaseGrouped() {
-      const resolvePhase = (pid) => {
-        if (pid === null || pid === undefined) return 'Ohne Phase';
-        const ph = phases.find(p => p.id === pid);
-        return ph ? ph.name : 'Ohne Phase';
-      };
-      const list = aggregatedPlan();
-      if (!list.length) {
-        phaseView.innerHTML = '<div class="muted">Keine Arbeitspakete vorhanden.</div>';
-        return;
-      }
-      const groups = {};
-      for (const p of list) {
-        const key = p.phaseId ?? 'none';
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(p);
-      }
-      const phaseName = (pid) => {
-        if (pid === 'none') return 'Ohne Phase';
-        return resolvePhase(Number(pid));
-      };
-      const order = Object.keys(groups).sort((a, b) => {
-        const ia = phases.findIndex(p => p.id === (a === 'none' ? null : Number(a)));
-        const ib = phases.findIndex(p => p.id === (b === 'none' ? null : Number(b)));
-        const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-        const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-        return sa - sb;
-      });
-      phaseView.innerHTML = order.map(key => {
-        const list = groups[key];
-        const title = phaseName(key);
-        const showWarn = key === 'none';
-        const rowsHtml = list.map(p => `
-          <tr draggable="true" class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
-            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''}</td>
-            <td>${statusChip(p.status || 'ToDo')}</td>
-          <td>${p.hours}</td>
-            <td>${fmt(p.start)}</td>
-            <td>${fmt(p.end)}</td>
-            <td>
-              <button class="icon-square" title="Bearbeiten" data-edit="${p.id}"><span class="material-symbols-rounded">edit</span></button>
-              <button class="icon-square danger" title="Loeschen" data-delete="${p.id}"><span class="material-symbols-rounded">delete</span></button>
-            </td>
-          </tr>
-        `).join('');
-        return `
-          <h3 style="margin:12px 0 6px;">${title}</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Arbeitspaket</th><th>Status</th><th>Stunden</th><th>Start</th><th>Ende</th><th>Aktion</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-        `;
-      }).join('');
-    }
+    const renderPhaseGroupedView = () => {
+      renderPhaseGrouped(aggregatedPlan(), phases, phaseView);
+    };
 
     /* ---------- Kanban ---------- */
     function renderKanbanPhaseOptions() {
-      if (!kanbanPhaseSelect) return;
-      // Auswahl merken, damit der Nutzer beim Reload/Drag nicht immer auf Phase 1 zurückfällt
-      const previous = kanbanPhaseSelect.value;
-      if (!phases.length) {
-        kanbanPhaseSelect.innerHTML = '<option value="">(keine Phasen)</option>';
-        return;
-      }
-      kanbanPhaseSelect.innerHTML = phases.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-      const found = phases.find(p => String(p.id) === previous);
-      kanbanPhaseSelect.value = found ? previous : (phases[0]?.id ?? '');
+      renderKanbanPhaseOptionsMod(phases, kanbanPhaseSelect);
     }
 
     function renderKanbanBoard() {
-      if (!kanbanBoard || !kanbanPhaseSelect) return;
-      const selectedPhase = Number(kanbanPhaseSelect.value || phases[0]?.id || 0);
-      const list = packages.filter(p => !selectedPhase || p.phaseId === selectedPhase);
-      kanbanBoard.innerHTML = KANBAN_STATUSES.map(status => {
-        const items = list.filter(p => (p.status || 'Backlog') === status);
-        return `
-          <div class="kanban-column" data-status="${status}">
-            <div class="kanban-head"><span>${KANBAN_LABELS[status]}</span><span style="font-size:12px;color:var(--muted);">${items.length}</span></div>
-            <div class="kanban-cards" data-status="${status}">
-              ${items.map(renderKanbanCard).join('')}
-            </div>
-          </div>
-        `;
-      }).join('');
-      attachKanbanDnD();
-    }
-
-    function renderKanbanCard(item) {
-      const color = KANBAN_COLOR[item.status] || '#94a3b8';
-      const dot = `<span class="status-dot" style="background:${color};"></span>`;
-      return `<div class="kanban-card" draggable="true" data-id="${item.id}" data-status="${item.status || 'Backlog'}">
-        <h4>${dot}${item.name}</h4>
-        ${item.description ? `<p>${item.description.slice(0, 120)}</p>` : ''}
-      </div>`;
-    }
-
-    function attachKanbanDnD() {
-      const cards = kanbanBoard.querySelectorAll('.kanban-card');
-      let dragId = null;
-      cards.forEach(card => {
-        card.addEventListener('dragstart', (e) => {
-          dragId = Number(card.dataset.id);
-          e.dataTransfer.effectAllowed = 'move';
-          setTimeout(() => card.classList.add('dragging'), 0);
-        });
-        card.addEventListener('dragend', () => {
-          card.classList.remove('dragging');
-          dragId = null;
-          kanbanBoard.querySelectorAll('.kanban-droptarget').forEach(c => c.classList.remove('kanban-droptarget'));
-        });
+      renderKanbanBoardMod({
+        boardEl: kanbanBoard,
+        phaseSelectEl: kanbanPhaseSelect,
+        phases,
+        packages,
+        onStatusChange: refreshPlan
       });
-      kanbanBoard.querySelectorAll('.kanban-cards').forEach(col => {
-        col.addEventListener('dragover', (e) => {
-          e.preventDefault();
-          col.classList.add('kanban-droptarget');
-        });
-        col.addEventListener('dragleave', () => col.classList.remove('kanban-droptarget'));
-        col.addEventListener('drop', async (e) => {
-          e.preventDefault();
-          col.classList.remove('kanban-droptarget');
-          if (!dragId) return;
-          const targetStatus = col.dataset.status;
-          const cardEl = kanbanBoard.querySelector(`.kanban-card[data-id="${dragId}"]`);
-          if (cardEl && cardEl.dataset.status !== targetStatus) {
-            await updateKanbanStatus(dragId, targetStatus);
-          }
-          await refreshPlan();
-        });
-      });
-    }
-
-    async function updateKanbanStatus(id, status) {
-      const pkg = packages.find(p => p.id === id);
-      if (!pkg) return;
-      let criteria = normalizeCriteria(pkg.acceptanceCriteria);
-      if (status === 'Finished' && criteria.some(c => !c.done)) {
-        const confirmFinish = window.confirm('Nicht alle Akzeptanzkriterien sind erledigt. Willst du alle als erledigt markieren und abschliessen?');
-        if (!confirmFinish) return;
-        criteria = criteria.map(c => ({ ...c, done: true }));
-      }
-      const body = {
-        ...pkg,
-        status,
-        acceptanceCriteria: criteria,
-        doneDate: status === 'Finished' ? (pkg.doneDate || new Date().toISOString()) : null
-      };
-      const res = await apiRequest(`/workPackages/${id}`, {
-        method: 'PUT',
-        body
-      });
-      if (!res.ok) console.error('Update failed');
     }
 
     function renderCurrentView() {
@@ -1451,11 +858,11 @@ const params = new URLSearchParams(window.location.search);
       fullscreenBtn.classList.add('hidden');
       if (currentView === 'plan') {
         viewPlan.classList.remove('hidden');
-        renderPlanTable();
+        renderPlanTableView();
         if (filterGroup) filterGroup.classList.remove('hidden');
       } else if (currentView === 'phase') {
         viewPhase.classList.remove('hidden');
-        renderPhaseGrouped();
+        renderPhaseGroupedView();
         if (filterGroup) filterGroup.classList.remove('hidden');
       } else {
         viewChart.classList.remove('hidden');
@@ -2070,31 +1477,6 @@ const params = new URLSearchParams(window.location.search);
         <div class="muted" style="margin-top:10px;font-size:13px;">Ist/Plan basiert auf Plan-Berechnung und Arbeitsjournal; Forecast nutzt offene Pakete ab heute.</div>
       `;
     }
-    function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function canvasToBlob(canvas, type = 'image/png', quality) {
-  return new Promise((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), type, quality);
-  });
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
 
 async function exportChartAsPng() {
   if (!planCache.length) {
@@ -2278,7 +1660,7 @@ async function exportChartAsPng() {
     closeModalBtn.addEventListener('click', closeModal);
     cancelModalBtn.addEventListener('click', closeModal);
 
-    criteriaAddBtn?.addEventListener('click', () => addCriteriaRow());
+    criteriaAddBtn?.addEventListener('click', () => addCriteriaRow('', false, criteriaList));
     inlineCriteriaAddBtn?.addEventListener('click', () => addCriteriaRow('', false, inlineCriteriaList));
     resetCriteriaForm([], inlineCriteriaList);
 
@@ -2292,7 +1674,7 @@ async function exportChartAsPng() {
         time: Number(taskTime.value),
         status: taskStatus.value || 'Backlog',
         parallel: taskParallel.checked,
-        acceptanceCriteria: collectCriteriaFromForm()
+        acceptanceCriteria: collectCriteriaFromForm(criteriaList)
       };
       if (!payload.name) {
         setStatus('Name darf nicht leer sein.', true);
@@ -2566,21 +1948,21 @@ async function exportChartAsPng() {
       const date = journalDate?.value || new Date().toISOString().split('T')[0];
 
       if (!title || !description) {
-        setJournalStatus('Bitte Titel und Beschreibung ausfüllen.', true);
+        showJournalStatus('Bitte Titel und Beschreibung ausfüllen.', true);
         return;
       }
       if (Number.isNaN(hours)) {
-        setJournalStatus('Bitte eine Stundenanzahl angeben.', true);
+        showJournalStatus('Bitte eine Stundenanzahl angeben.', true);
         return;
       }
 
       const entry = { title, description, phase, packageId, packageName, hours: hours.toFixed(2), date };
       if (journalEditIndex !== null) {
         journalEntries[journalEditIndex] = entry;
-        setJournalStatus('Eintrag aktualisiert.');
+        showJournalStatus('Eintrag aktualisiert.');
       } else {
         journalEntries.unshift(entry);
-        setJournalStatus('Eintrag gespeichert.');
+        showJournalStatus('Eintrag gespeichert.');
       }
       persistJournal();
       renderJournal();
@@ -2595,7 +1977,7 @@ async function exportChartAsPng() {
         journalEntries.splice(index, 1);
         persistJournal();
         renderJournal();
-        setJournalStatus('Eintrag gelöscht.');
+        showJournalStatus('Eintrag gelöscht.');
         if (journalEditIndex === index) resetJournalForm();
         return;
       }
@@ -2606,7 +1988,7 @@ async function exportChartAsPng() {
     });
 
     function initJournal() {
-      setJournalToday();
+      setJournalToday(journalDate);
       renderJournalPhaseOptions();
       loadJournal();
     }
@@ -2623,13 +2005,13 @@ async function exportChartAsPng() {
       if (journalDate) journalDate.value = entry.date;
       if (journalSubmitBtn) journalSubmitBtn.textContent = 'Änderungen speichern';
       if (journalCancelBtn) journalCancelBtn.style.display = 'inline-block';
-      setJournalStatus('Bearbeitung aktiviert.');
+      showJournalStatus('Bearbeitung aktiviert.');
     }
 
     function resetJournalForm() {
       journalEditIndex = null;
       journalForm.reset();
-      setJournalToday();
+      setJournalToday(journalDate);
       if (journalSubmitBtn) journalSubmitBtn.textContent = 'Eintrag speichern';
       if (journalCancelBtn) journalCancelBtn.style.display = 'none';
     }
@@ -2647,11 +2029,15 @@ async function exportChartAsPng() {
       if (!btn) return;
       const type = btn.dataset.export;
       toggleDownloadPanel(false);
-      if (!journalEntries.length) { setJournalStatus('Keine Einträge zum Export.', true); return; }
-      if (type === 'csv') exportCSV(false);
-      else if (type === 'csv-lite') exportCSV(true);
-      else if (type === 'md') exportMarkdown();
-      else if (type === 'pdf') exportPDF();
+      if (!journalEntries.length) { showJournalStatus('Keine Einträge zum Export.', true); return; }
+      const totalText = journalTotal?.textContent ?? '';
+      if (type === 'csv') exportCSV(journalEntries, projectId, false);
+      else if (type === 'csv-lite') exportCSV(journalEntries, projectId, true);
+      else if (type === 'md') exportMarkdown(journalEntries, projectId, totalText);
+      else if (type === 'pdf') {
+        const ok = exportPDF(journalEntries, projectId, totalText);
+        if (!ok) showJournalStatus('Popup blockiert – bitte erlauben.', true);
+      }
     });
 
     document.getElementById('nav-kanban')?.addEventListener('click', () => setTopView('kanban'));
