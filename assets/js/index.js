@@ -1,4 +1,8 @@
-(() => {
+import { cleanDB } from './clean-db.js';
+
+(async () => {
+  await cleanDB();
+  const API_BASE = window.API_BASE || (window.location?.origin?.startsWith('file:') ? 'http://localhost:3000' : '');
   const API_URL = '/projects';
   const form = document.getElementById('project-form');
   const rows = document.getElementById('project-rows');
@@ -26,7 +30,7 @@
 
   async function loadProjects() {
     try {
-      const res = await fetch(API_URL);
+      const res = await fetch(API_BASE + API_URL);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       renderRows(data);
@@ -74,7 +78,7 @@
     }
 
     try {
-      const res = await fetch(API_URL, {
+      const res = await fetch(API_BASE + API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, hours })
@@ -100,7 +104,7 @@
       await deleteCollection(`/workPackages?projectId=${id}`, 'workPackages');
       await deleteCollection(`/weeklyPlans?projectId=${id}`, 'weeklyPlans');
       await deleteCollection(`/projectStarts?projectId=${id}`, 'projectStarts');
-      const res = await fetch(`/projects/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/projects/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       await loadProjects();
       setStatus('Projekt gelöscht.');
@@ -110,11 +114,11 @@
   });
 
   async function deleteCollection(url, name) {
-    const res = await fetch(url);
+    const res = await fetch(API_BASE + url);
     if (!res.ok) return;
     const items = await res.json();
     for (const item of items) {
-      await fetch(`/${name}/${item.id}`, { method: 'DELETE' });
+      await fetch(`${API_BASE}/${name}/${item.id}`, { method: 'DELETE' });
     }
   }
 

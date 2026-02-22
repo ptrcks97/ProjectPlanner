@@ -1,5 +1,6 @@
 import { apiRequest } from './dashboard/api.js';
 import { fmt, isoWeek, startOfWeek, statusChip } from './dashboard/utils.js';
+import { cleanDB } from './clean-db.js';
 
 const params = new URLSearchParams(window.location.search);
     const projectId = Number(params.get('id'));
@@ -91,7 +92,6 @@ const params = new URLSearchParams(window.location.search);
     const taskTime = document.getElementById('task-time');
     const taskStatus = document.getElementById('task-status');
     const taskParallel = document.getElementById('task-parallel');
-    const taskSpread = document.getElementById('task-spread');
     const criteriaList = document.getElementById('task-criteria-list');
     const criteriaAddBtn = document.getElementById('task-criteria-add');
     const inlineCriteriaList = document.getElementById('inline-criteria-list');
@@ -112,7 +112,6 @@ const params = new URLSearchParams(window.location.search);
     const detailEnd = document.getElementById('detail-end');
     const detailId = document.getElementById('detail-id');
     const detailParallel = document.getElementById('detail-parallel');
-    const detailSpread = document.getElementById('detail-spread');
     const detailCriteria = document.getElementById('detail-criteria');
     // inline task form
     const inlineTaskForm = document.getElementById('inline-task-form');
@@ -121,7 +120,6 @@ const params = new URLSearchParams(window.location.search);
     const inlineTaskDesc = document.getElementById('inline-task-desc');
     const inlineTaskStatus = document.getElementById('inline-task-status');
     const inlineTaskParallel = document.getElementById('inline-task-parallel');
-    const inlineTaskSpread = document.getElementById('inline-task-spread');
     const inlineTaskTime = document.getElementById('inline-task-time');
     const reloadBtn = document.getElementById('reload-btn');
     let editingId = null;
@@ -132,6 +130,7 @@ const params = new URLSearchParams(window.location.search);
     const phaseNameInput = document.getElementById('phase-name');
     const phaseDescInput = document.getElementById('phase-desc');
     const phaseColorInput = document.getElementById('phase-color');
+    const phaseProjectWideInput = document.getElementById('phase-projectwide');
     const phaseRows = document.getElementById('phase-rows');
 
     // Week form inputs
@@ -361,6 +360,7 @@ const params = new URLSearchParams(window.location.search);
       const arr = await res.json();
       const normalized = arr.map((p, idx) => ({
         ...p,
+        projectWide: !!p.projectWide,
         sortIndex: Number.isFinite(Number(p.sortIndex)) ? Number(p.sortIndex) : (Number(p.id ?? idx) || idx)
       }));
       phases = normalized.sort(comparePhases);
@@ -671,8 +671,7 @@ const params = new URLSearchParams(window.location.search);
         return copy;
       };
 
-      const spreadTasks = packages.filter(p => p.spread);
-      const normalTasks = sortPackages(packages.filter(p => !p.spread));
+      const tasks = sortPackages(packages);
 
       function scheduleSequential(list, capTemplate) {
         const plan = [];
@@ -738,8 +737,7 @@ const params = new URLSearchParams(window.location.search);
                 doneDate: g.doneDate,
                 start: new Date(startAt),
                 end: new Date(endAt),
-                parallel: !!g.parallel,
-                spread: !!g.spread
+                parallel: !!g.parallel
               });
             }
             i = j - 1;
@@ -755,8 +753,7 @@ const params = new URLSearchParams(window.location.search);
             doneDate: pkg.doneDate,
             start: startAt,
             end: endAt,
-            parallel: !!pkg.parallel,
-            spread: !!pkg.spread
+            parallel: !!pkg.parallel
           });
         }
 
@@ -766,70 +763,10 @@ const params = new URLSearchParams(window.location.search);
         return { plan, maxEnd, days: distinctDays, totalHours };
       }
 
-      const spreadTotal = spreadTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
-      const normalTotal = normalTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
-      let weeksGuess = Math.max(1, Math.ceil((normalTotal || spreadTotal || 1) / weeklyTotal));
+      const { plan, days } = scheduleSequential(tasks, weeklyMap);
+      const totalHours = tasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
 
-      let normalPlan = [];
-      let finalWeeks = weeksGuess;
-      for (let iter = 0; iter < 6; iter++) {
-        const perWeekSpread = spreadTotal / weeksGuess;
-        const adjustedWeekMap = {};
-        Object.entries(weeklyMap).forEach(([day, cap]) => {
-          const share = weeklyTotal ? (cap || 0) / weeklyTotal : 0;
-          adjustedWeekMap[day] = Math.max(0, (cap || 0) - perWeekSpread * share);
-        });
-        const res = scheduleSequential(normalTasks, adjustedWeekMap);
-        normalPlan = res.plan;
-        const maxEnd = res.maxEnd || new Date(startDate);
-        const startMonday = startOfWeek(new Date(startDate));
-        const endMonday = startOfWeek(maxEnd);
-        const diffMs = endMonday - startMonday;
-        const weeksActual = Math.max(1, Math.round(diffMs / (7 * 86400000)) + 1);
-        finalWeeks = weeksActual;
-        if (weeksActual === weeksGuess) break;
-        weeksGuess = weeksActual;
-      }
-
-      const spreadPlan = [];
-      const projectStart = new Date(startDate);
-      const findDayWithCap = (weekStart) => {
-        let day = new Date(weekStart);
-        for (let i = 0; i < 7; i++) {
-          const dow = day.getDay();
-          if ((weeklyMap[dow] ?? 0) > 0) return new Date(day);
-          day.setDate(day.getDate() + 1);
-        }
-        return new Date(weekStart);
-      };
-
-      spreadTasks.forEach(t => {
-        const perWeek = (Number(t.time) || 0) / finalWeeks;
-        if (perWeek <= 0) return;
-        for (let w = 0; w < finalWeeks; w++) {
-          const rawStart = new Date(projectStart.getTime() + w * 7 * 86400000);
-          const weekStart = w === 0 ? projectStart : startOfWeek(rawStart);
-          const day = findDayWithCap(weekStart < projectStart ? projectStart : weekStart);
-          spreadPlan.push({
-            id: t.id,
-            phaseId: t.phaseId,
-            name: t.name,
-            hours: perWeek,
-            status: t.status || 'ToDo',
-            doneDate: t.doneDate,
-            start: day,
-            end: day,
-            parallel: !!t.parallel,
-            spread: true
-          });
-        }
-      });
-
-      const plan = [...normalPlan, ...spreadPlan].sort((a, b) => a.start - b.start || a.end - b.end);
-      const totalHours = normalTotal + spreadTotal;
-      const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
-
-      return { plan, totalHours, days: distinctDays };
+      return { plan, totalHours, days };
     }
 
     function nextWorkDay(date, weeklyMap) {
@@ -862,37 +799,7 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function aggregatedPlan() {
-      const list = filteredPlan();
-      const map = new Map();
-      list.forEach(p => {
-        if (!p.spread) { map.set(p.id, p); return; }
-        const existing = map.get(p.id);
-        if (!existing) {
-          map.set(p.id, { ...p, __count: 1, startMin: p.start, endMax: p.end, totalHours: Number(p.hours) || 0 });
-        } else {
-          existing.totalHours = (Number(existing.totalHours) || 0) + (Number(p.hours) || 0);
-          existing.__count += 1;
-          if (p.start < existing.startMin) existing.startMin = p.start;
-          if (p.end > existing.endMax) existing.endMax = p.end;
-        }
-      });
-      return Array.from(map.values()).map(v => {
-        if (!v.spread) return v;
-        const perWeek = v.__count ? (v.totalHours / v.__count) : v.totalHours;
-        return {
-          id: v.id,
-          phaseId: v.phaseId,
-          name: v.name,
-          status: v.status,
-          doneDate: v.doneDate,
-          parallel: v.parallel,
-          spread: true,
-          hours: v.totalHours,
-          perWeek,
-          start: v.startMin,
-          end: v.endMax
-        };
-      });
+      return filteredPlan();
     }
 
     // Drag & drop within phase (Phase view)
@@ -1081,6 +988,7 @@ const params = new URLSearchParams(window.location.search);
             <div class="phase-name" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${p.name}</div>
           </div>
           <div style="display:flex;gap:6px;justify-content:flex-end; flex-shrink:0;">
+            ${p.projectWide ? '<span class="pill pill-ghost" title="Über ganzes Projekt">Projektweit</span>' : ''}
             <button class="icon-action" aria-label="Bearbeiten" data-edit-phase="${p.id}"><span class="material-symbols-rounded">edit</span></button>
             <button class="icon-action danger" aria-label="Loeschen" data-delete-phase="${p.id}"><span class="material-symbols-rounded">delete</span></button>
           </div>
@@ -1104,6 +1012,7 @@ const params = new URLSearchParams(window.location.search);
 
     async function init() {
       try {
+        await cleanDB();
         await loadProject();
         await refreshPlan();
         initJournal();
@@ -1218,6 +1127,7 @@ const params = new URLSearchParams(window.location.search);
           phaseNameInput.value = phase.name;
           phaseDescInput.value = phase.description || '';
           phaseColorInput.value = sanitizeColor(phase.color);
+          if (phaseProjectWideInput) phaseProjectWideInput.checked = !!phase.projectWide;
     }
 
     function setTab(tab) {
@@ -1303,7 +1213,6 @@ const params = new URLSearchParams(window.location.search);
       taskDesc.value = pkg?.description || '';
       taskStatus.value = pkg?.status || 'ToDo';
       taskParallel.checked = !!pkg?.parallel;
-      taskSpread.checked = !!pkg?.spread;
       taskTime.value = pkg?.time ?? 0;
       const selectedPhase = pkg?.phaseId ?? '';
       taskPhase.innerHTML = `<option value="">(keine Phase)</option>` + phases.map(p => `<option value="${p.id}" ${p.id === selectedPhase ? 'selected' : ''}>${p.name}</option>`).join('');
@@ -1333,7 +1242,6 @@ const params = new URLSearchParams(window.location.search);
       detailPhase.textContent = resolvePhaseName(pkg.phaseId);
       detailId.textContent = pkg.id ?? '-';
       detailParallel.textContent = pkg.parallel ? 'Ja' : 'Nein';
-      detailSpread.textContent = pkg.spread ? 'Ja' : 'Nein';
       detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
       detailStatusPlain.textContent = statusLabel(pkg.status);
       detailHours.textContent = `${pkg.time ?? '-'} h`;
@@ -1361,11 +1269,10 @@ const params = new URLSearchParams(window.location.search);
       }
       rows.innerHTML = list.map(p => {
         const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
-        const spread = p.spread ? `<span class="pill pill-ghost">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : '';
         return `
         <tr class="task-row" data-task-id="${p.id}">
           <td>${resolvePhase(p.phaseId)}</td>
-          <td>${p.name} ${warn} ${spread}</td>
+          <td>${p.name} ${warn}</td>
           <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
           <td>${fmt(p.start)}</td>
@@ -1413,7 +1320,7 @@ const params = new URLSearchParams(window.location.search);
         const showWarn = key === 'none';
         const rowsHtml = list.map(p => `
           <tr draggable="true" class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
-            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''} ${p.spread ? `<span class=\"pill pill-ghost\">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : ''}</td>
+            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''}</td>
             <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
             <td>${fmt(p.start)}</td>
@@ -1646,6 +1553,20 @@ const params = new URLSearchParams(window.location.search);
       return '';
     }
 
+    const PW_COLOR = '#f59e0b';
+    function isProjectWidePhase(pid) {
+      if (pid === null || pid === undefined || pid === 'none') return false;
+      const ph = phases.find(p => p.id === Number(pid));
+      return !!ph?.projectWide;
+    }
+
+    function phaseLabel(pid) {
+      if (pid === 'none' || pid === null || pid === undefined) return 'Ohne Phase';
+      const ph = phases.find(p => p.id === Number(pid));
+      if (!ph) return 'Ohne Phase';
+      return ph.projectWide ? `${ph.name} ★` : ph.name;
+    }
+
     function renderChart() {
       const currentType = chartTypes[chartIndex];
       if (currentType !== 'health' && !planCache.length) {
@@ -1715,11 +1636,7 @@ const params = new URLSearchParams(window.location.search);
         if (!phaseGroups[key]) phaseGroups[key] = [];
         phaseGroups[key].push(p);
       }
-      const phaseName = (pid) => {
-        if (pid === 'none') return 'Ohne Phase';
-        const ph = phases.find(x => x.id === Number(pid));
-        return ph ? ph.name : 'Ohne Phase';
-      };
+      const phaseName = (pid) => phaseLabel(pid);
       const phaseColor = (pid) => {
         const ph = phases.find(x => x.id === Number(pid));
         return ph?.color || '#22d3ee';
@@ -1737,12 +1654,13 @@ const params = new URLSearchParams(window.location.search);
         const items = phaseGroups[pid];
         const color = pid === 'none' ? '#64748b' : phaseColor(pid);
         const rowBg = pid === 'none' ? 'rgba(255,255,255,0.01)' : `${color}22`;
+        const projectWide = isProjectWidePhase(pid);
         const barHeight = isZoomed ? 32 : 26;
         const barSpacing = isZoomed ? 44 : 32;
         const rowIndex = new Map();
         let rowCount = 0;
         const rowsForItems = items.map(t => {
-          const key = t.spread ? `spread-${t.id}` : `task-${t.id}`;
+          const key = `task-${t.id}`;
           if (!rowIndex.has(key)) rowIndex.set(key, rowCount++);
           return rowIndex.get(key);
         });
@@ -1752,12 +1670,13 @@ const params = new URLSearchParams(window.location.search);
           const left = (startOffset / totalDays) * 100;
           const width = (duration / totalDays) * 100 * barScale;
           const row = rowsForItems[idx];
-          return `<div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:${row*barSpacing}px;height:${barHeight}px;">${t.name}</div>`;
+          const highlight = projectWide ? `box-shadow:0 0 0 2px ${PW_COLOR}; border:1px solid ${PW_COLOR};` : '';
+          return `<div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:${row*barSpacing}px;height:${barHeight}px;${highlight}">${t.name}</div>`;
         }).join('');
         const trackHeight = Math.max(barSpacing, rowCount * barSpacing + 12);
         return `
           <div class="gantt-row">
-            <div class="gantt-label" style="background:${rowBg};">${phaseName(pid)}</div>
+            <div class="gantt-label" style="background:${rowBg};${projectWide ? `border-left:4px solid ${PW_COLOR};` : ''}">${phaseName(pid)}</div>
             <div class="gantt-track" style="height:${trackHeight}px; background:${rowBg};">
               <div class="gantt-grid" style="grid-template-columns: repeat(${totalDays}, ${dayWidth}%); position:absolute; inset:0; pointer-events:none;">${''}</div>
               ${barRows}
@@ -1864,16 +1783,17 @@ const params = new URLSearchParams(window.location.search);
         const width = (duration / totalDays) * 100 * barScale;
         const ph = pid === 'none' ? null : phases.find(p => p.id === Number(pid));
         const color = ph?.color || '#64748b';
-        const label = ph?.name || 'Ohne Phase';
+        const label = phaseLabel(pid);
         const rowBg = pid === 'none' ? 'rgba(255,255,255,0.02)' : `${color}20`;
+        const projectWide = isProjectWidePhase(pid);
         const barHeight = isZoomed ? 30 : 26;
         const trackHeight = barHeight + 12;
         return `
           <div class="gantt-row">
-            <div class="gantt-label" style="background:${rowBg};">${label}</div>
+            <div class="gantt-label" style="background:${rowBg};${projectWide ? `border-left:4px solid ${PW_COLOR};` : ''}">${label}</div>
             <div class="gantt-track" style="height:${trackHeight}px; background:${rowBg};">
               <div class="gantt-grid" style="grid-template-columns: repeat(${totalDays}, ${dayWidth}%); position:absolute; inset:0; pointer-events:none;"></div>
-              <div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:8px;height:${barHeight}px;">${label}</div>
+              <div class="gantt-bar small" style="left:${left}%;width:${width}%;background:${color};top:8px;height:${barHeight}px;${projectWide ? `box-shadow:0 0 0 2px ${PW_COLOR}; border:1px solid ${PW_COLOR};` : ''}">${label}</div>
             </div>
           </div>
         `;
@@ -1928,7 +1848,8 @@ const params = new URLSearchParams(window.location.search);
         const ph = pid === 'none' ? null : phases.find(x => x.id === Number(pid));
         return {
           id: pid,
-          label: ph ? ph.name : 'Ohne Phase',
+          label: ph ? (ph.projectWide ? `${ph.name} ★` : ph.name) : 'Ohne Phase',
+          projectWide: !!ph?.projectWide,
           value: val,
           color: ph?.color || '#6b7280'
         };
@@ -1942,7 +1863,7 @@ const params = new URLSearchParams(window.location.search);
         }).join(', ');
         const legend = items.map(it => `
           <div class="legend-row">
-            <span class="legend-swatch" style="background:${it.color};"></span>
+            <span class="legend-swatch" style="background:${it.color};${it.projectWide ? `box-shadow:0 0 0 2px ${PW_COLOR}; border:1px solid ${PW_COLOR};` : ''}"></span>
             <span>${it.label}</span>
             <span class="muted" style="margin-left:auto;">${it.value.toFixed(1)}h</span>
           </div>
@@ -1987,7 +1908,7 @@ const params = new URLSearchParams(window.location.search);
           <div class="bar-row">
             <span style="white-space: nowrap;">${it.label}</span>
             <div class="bar-track">
-              <div class="bar-fill" style="width:${(it.value / max * 100).toFixed(1)}%; background:${it.color};"></div>
+              <div class="bar-fill" style="width:${(it.value / max * 100).toFixed(1)}%; background:${it.color};${it.projectWide ? `box-shadow:0 0 0 2px ${PW_COLOR}; border:1px solid ${PW_COLOR};` : ''}"></div>
             </div>
             <span class="muted" style="text-align:right;">${it.value.toFixed(1)}h</span>
           </div>
@@ -2371,7 +2292,6 @@ async function exportChartAsPng() {
         time: Number(taskTime.value),
         status: taskStatus.value || 'Backlog',
         parallel: taskParallel.checked,
-        spread: taskSpread.checked,
         acceptanceCriteria: collectCriteriaFromForm()
       };
       if (!payload.name) {
@@ -2527,6 +2447,7 @@ async function exportChartAsPng() {
         description: phaseDescInput.value.trim(),
         color: sanitizeColor(phaseColorInput.value),
         projectId,
+        projectWide: !!phaseProjectWideInput?.checked,
         sortIndex: nextSortIndex
       };
       if (!payload.name) {
@@ -2549,6 +2470,7 @@ async function exportChartAsPng() {
           if (!res.ok) throw new Error('HTTP ' + res.status);
         }
         phaseForm.reset();
+        if (phaseProjectWideInput) phaseProjectWideInput.checked = false;
         phaseIdInput.value = '';
         await refreshPlan();
       } catch (err) {
@@ -2562,6 +2484,9 @@ async function exportChartAsPng() {
       if (/^#([0-9a-fA-F]{6})$/.test(hex)) return hex;
       return '#22d3ee';
     }
+    phaseForm.addEventListener('reset', () => {
+      if (phaseProjectWideInput) phaseProjectWideInput.checked = false;
+    });
 
     document.getElementById('week-form').addEventListener('submit', async (evt) => {
       evt.preventDefault();
@@ -2742,7 +2667,6 @@ async function exportChartAsPng() {
         description: inlineTaskDesc.value.trim(),
         status: inlineTaskStatus.value || 'Backlog',
         parallel: inlineTaskParallel.checked,
-        spread: inlineTaskSpread.checked,
         time: Number(inlineTaskTime.value),
         acceptanceCriteria: collectCriteriaFromForm(inlineCriteriaList)
       };
