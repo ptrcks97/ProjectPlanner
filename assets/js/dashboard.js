@@ -90,8 +90,12 @@ const params = new URLSearchParams(window.location.search);
     const taskDesc = document.getElementById('task-desc');
     const taskTime = document.getElementById('task-time');
     const taskStatus = document.getElementById('task-status');
+    const taskRecurring = document.getElementById('task-recurring');
+    const taskRecurringCount = document.getElementById('task-recurring-count');
+    const taskRecurringWrap = document.getElementById('task-recurring-count-wrap');
+    const taskRecurringInterval = document.getElementById('task-recurring-interval');
+    const taskRecurringIntervalWrap = document.getElementById('task-recurring-interval-wrap');
     const taskParallel = document.getElementById('task-parallel');
-    const taskSpread = document.getElementById('task-spread');
     const criteriaList = document.getElementById('task-criteria-list');
     const criteriaAddBtn = document.getElementById('task-criteria-add');
     const inlineCriteriaList = document.getElementById('inline-criteria-list');
@@ -112,7 +116,6 @@ const params = new URLSearchParams(window.location.search);
     const detailEnd = document.getElementById('detail-end');
     const detailId = document.getElementById('detail-id');
     const detailParallel = document.getElementById('detail-parallel');
-    const detailSpread = document.getElementById('detail-spread');
     const detailCriteria = document.getElementById('detail-criteria');
     // inline task form
     const inlineTaskForm = document.getElementById('inline-task-form');
@@ -120,8 +123,12 @@ const params = new URLSearchParams(window.location.search);
     const inlineTaskName = document.getElementById('inline-task-name');
     const inlineTaskDesc = document.getElementById('inline-task-desc');
     const inlineTaskStatus = document.getElementById('inline-task-status');
+    const inlineTaskRecurring = document.getElementById('inline-task-recurring');
+    const inlineTaskRecurringCount = document.getElementById('inline-task-recurring-count');
+    const inlineTaskRecurringWrap = document.getElementById('inline-task-recurring-count-wrap');
+    const inlineTaskRecurringInterval = document.getElementById('inline-task-recurring-interval');
+    const inlineTaskRecurringIntervalWrap = document.getElementById('inline-task-recurring-interval-wrap');
     const inlineTaskParallel = document.getElementById('inline-task-parallel');
-    const inlineTaskSpread = document.getElementById('inline-task-spread');
     const inlineTaskTime = document.getElementById('inline-task-time');
     const reloadBtn = document.getElementById('reload-btn');
     let editingId = null;
@@ -208,6 +215,8 @@ const params = new URLSearchParams(window.location.search);
     let startStr = null;
     let planCache = [];
     let filterMode = 'all';
+    let isRebalancingRecurring = false;
+    let suppressRebalance = false;
 
     const KANBAN_STATUSES = ['Backlog', 'ToDo', 'Warten', 'OnHold', 'Finished'];
     const KANBAN_LABELS = {
@@ -229,7 +238,6 @@ const params = new URLSearchParams(window.location.search);
         title: 'Plan',
         body: 'Zeitplan aller Arbeitspakete in Reihenfolge. Filtere nach Heute/Woche/Monat und bearbeite über die Stift-Icons.',
         bullets: [
-          'Parallel/Projektweit markierte Pakete behalten ihre Logik im Plan.',
           'Exports: Diagramme im Tab „Diagramme“ (Bild/PDF) erstellen.',
           'Arbeitsjournal-Exports (CSV, Markdown, PDF) unter „Arbeitsjournal“.'
         ]
@@ -383,6 +391,187 @@ const params = new URLSearchParams(window.location.search);
             : []
         }));
       renderJournalPackageOptions();
+    }
+
+    function nextSortStart() {
+      if (!packages.length) return 0;
+      const max = Math.max(...packages.map(p => Number.isFinite(Number(p.sortIndex)) ? Number(p.sortIndex) : -1));
+      return Number.isFinite(max) ? max + 1 : 0;
+    }
+
+    async function createRecurringPackages(basePayload, recurCount) {
+      const INTERVAL = Math.max(1, Number(basePayload.recurringInterval) || 10);
+      const apiRetry = async (fn, tries = 3, delayMs = 150) => {
+        let lastErr;
+        for (let i = 0; i < tries; i++) {
+          try {
+            const res = await fn();
+            if (!res) throw new Error('Keine Antwort');
+            return res;
+          } catch (err) {
+            lastErr = err;
+            console.warn('[recurring] request retry', i + 1, err);
+            if (i < tries - 1) {
+              await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+        }
+        throw lastErr;
+      };
+      const existing = [...packages].sort((a, b) => {
+        const sa = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number.MAX_SAFE_INTEGER;
+        const sb = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number.MAX_SAFE_INTEGER;
+        if (sa !== sb) return sa - sb;
+        return (a.id ?? 0) - (b.id ?? 0);
+      });
+
+      console.info('[recurring] start', { recurCount, existingCount: existing.length });
+
+      const order = [];
+      // Build new order with placeholders for recurring tasks based on interval.
+      let recAdded = 0;
+      let counter = 0;
+      for (const pkg of existing) {
+        order.push({ type: 'existing', id: pkg.id });
+        counter++;
+        if (counter >= INTERVAL && recAdded < recurCount) {
+          order.push({ type: 'new', idx: recAdded });
+          recAdded++;
+          counter = 0;
+        }
+      }
+      while (recAdded < recurCount) {
+        order.push({ type: 'new', idx: recAdded });
+        recAdded++;
+      }
+
+      console.info('[recurring] order built', { orderLength: order.length, expectedNew: recurCount, interval: INTERVAL });
+
+      const chunk = basePayload.time / recurCount;
+      if (!Number.isFinite(chunk) || chunk <= 0) throw new Error('Stunden müssen > 0 sein');
+
+      const postStatuses = [];
+      const updateStatuses = [];
+      const groupId = basePayload.recurringGroup || `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`;
+      let newIdx = 0;
+
+      for (let i = 0; i < order.length; i++) {
+        const item = order[i];
+        if (item.type === 'new') {
+          const hours = newIdx === recurCount - 1
+            ? (basePayload.time - chunk * (recurCount - 1))
+            : chunk;
+          try {
+            const res = await apiRetry(() => apiRequest('/workPackages', {
+              method: 'POST',
+              body: {
+                ...basePayload,
+                name: `${basePayload.name} (${newIdx + 1}/${recurCount})`,
+                time: Number(hours.toFixed(3)),
+                sortIndex: i,
+                recurringGroup: groupId,
+                recurringIndex: newIdx,
+                recurringTotal: recurCount,
+                recurringInterval: INTERVAL,
+                doneDate: basePayload.status === 'Finished' ? new Date().toISOString() : null
+              }
+            }));
+            postStatuses.push(res.status);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+          } catch (err) {
+            console.error('[recurring] post failed', err);
+            throw err;
+          }
+          newIdx++;
+        } else if (item.type === 'existing') {
+          const pkg = packages.find(p => p.id === item.id);
+          if (pkg && pkg.sortIndex !== i) {
+            try {
+              const res = await apiRetry(() => apiRequest(`/workPackages/${pkg.id}`, {
+                method: 'PUT',
+                body: { ...pkg, sortIndex: i }
+              }));
+              updateStatuses.push(res.status);
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+            } catch (err) {
+              console.error('[recurring] update failed', err);
+              throw err;
+            }
+          }
+        }
+      }
+
+      console.info('[recurring] done', { created: postStatuses.length, updated: updateStatuses.length, postStatuses, updateStatuses });
+    }
+
+    async function rebalanceRecurring() {
+      if (isRebalancingRecurring) return;
+      isRebalancingRecurring = true;
+      try {
+        const list = [...packages].sort((a, b) => {
+          const sa = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number.MAX_SAFE_INTEGER;
+          const sb = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number.MAX_SAFE_INTEGER;
+          if (sa !== sb) return sa - sb;
+          return (a.id ?? 0) - (b.id ?? 0);
+        });
+        const groups = {};
+        list.forEach(p => {
+          if (!p.recurringGroup) return;
+          if (!groups[p.recurringGroup]) groups[p.recurringGroup] = [];
+          groups[p.recurringGroup].push(p);
+        });
+        const groupIds = Object.keys(groups);
+        if (!groupIds.length) return;
+
+        // base order: non-recurring stay in place
+        let baseOrder = list.filter(p => !p.recurringGroup);
+
+        for (const gid of groupIds) {
+        const items = groups[gid].sort((a, b) => {
+          const ai = Number.isFinite(Number(a.recurringIndex)) ? Number(a.recurringIndex) : a.sortIndex || 0;
+          const bi = Number.isFinite(Number(b.recurringIndex)) ? Number(b.recurringIndex) : b.sortIndex || 0;
+          return ai - bi;
+        });
+        const count = items.length;
+        const interval = Math.max(1, Number(items[0].recurringInterval) || 10);
+        let cursor = interval - 1;
+          const newOrder = [];
+          let insertIdx = 0;
+          for (let i = 0; i < baseOrder.length; i++) {
+            newOrder.push(baseOrder[i]);
+            cursor--;
+            if (cursor < 0 && insertIdx < items.length) {
+              newOrder.push(items[insertIdx++]);
+              cursor = interval - 1;
+            }
+          }
+          while (insertIdx < items.length) {
+            newOrder.push(items[insertIdx++]);
+          }
+          baseOrder = newOrder;
+        }
+
+        const updates = [];
+        baseOrder.forEach((pkg, idx) => {
+          if (pkg.sortIndex !== idx) {
+            updates.push(apiRequest(`/workPackages/${pkg.id}`, {
+              method: 'PUT',
+              body: { ...pkg, sortIndex: idx }
+            }));
+            pkg.sortIndex = idx;
+          }
+        });
+        if (updates.length) {
+          const res = await Promise.all(updates);
+          if (res.some(r => !r.ok)) throw new Error('Rebalance HTTP ' + (res.find(r => !r.ok)?.status || '?'));
+          suppressRebalance = true;
+          await refreshPlan();
+        }
+      } catch (err) {
+        console.error('[recurring] rebalance failed', err);
+      } finally {
+        isRebalancingRecurring = false;
+      }
     }
 
     /* ---------- Akzeptanzkriterien ---------- */
@@ -656,23 +845,20 @@ const params = new URLSearchParams(window.location.search);
       const sortPackages = (list) => {
         const copy = [...list];
         copy.sort((a, b) => {
+          const sa = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number.MAX_SAFE_INTEGER;
+          const sb = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number.MAX_SAFE_INTEGER;
+          if (sa !== sb) return sa - sb; // globaler Sortindex dominiert
           const ia = phaseOrder.indexOf(a.phaseId);
           const ib = phaseOrder.indexOf(b.phaseId);
-          const sa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
-          const sb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
-          if (sa === sb) {
-            const si = (a.sortIndex ?? Number.MAX_SAFE_INTEGER);
-            const sj = (b.sortIndex ?? Number.MAX_SAFE_INTEGER);
-            if (si !== sj) return si - sj;
-            return (a.id ?? 0) - (b.id ?? 0);
-          }
-          return sa - sb;
+          const pa = ia === -1 ? Number.MAX_SAFE_INTEGER : ia;
+          const pb = ib === -1 ? Number.MAX_SAFE_INTEGER : ib;
+          if (pa !== pb) return pa - pb; // Phase als Fallback-Hint
+          return (a.id ?? 0) - (b.id ?? 0);
         });
         return copy;
       };
 
-      const spreadTasks = packages.filter(p => p.spread);
-      const normalTasks = sortPackages(packages.filter(p => !p.spread));
+      const orderedTasks = sortPackages(packages);
 
       function scheduleSequential(list, capTemplate) {
         const plan = [];
@@ -738,8 +924,7 @@ const params = new URLSearchParams(window.location.search);
                 doneDate: g.doneDate,
                 start: new Date(startAt),
                 end: new Date(endAt),
-                parallel: !!g.parallel,
-                spread: !!g.spread
+                parallel: !!g.parallel
               });
             }
             i = j - 1;
@@ -755,8 +940,7 @@ const params = new URLSearchParams(window.location.search);
             doneDate: pkg.doneDate,
             start: startAt,
             end: endAt,
-            parallel: !!pkg.parallel,
-            spread: !!pkg.spread
+            parallel: !!pkg.parallel
           });
         }
 
@@ -766,70 +950,8 @@ const params = new URLSearchParams(window.location.search);
         return { plan, maxEnd, days: distinctDays, totalHours };
       }
 
-      const spreadTotal = spreadTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
-      const normalTotal = normalTasks.reduce((s, p) => s + (Number(p.time) || 0), 0);
-      let weeksGuess = Math.max(1, Math.ceil((normalTotal || spreadTotal || 1) / weeklyTotal));
-
-      let normalPlan = [];
-      let finalWeeks = weeksGuess;
-      for (let iter = 0; iter < 6; iter++) {
-        const perWeekSpread = spreadTotal / weeksGuess;
-        const adjustedWeekMap = {};
-        Object.entries(weeklyMap).forEach(([day, cap]) => {
-          const share = weeklyTotal ? (cap || 0) / weeklyTotal : 0;
-          adjustedWeekMap[day] = Math.max(0, (cap || 0) - perWeekSpread * share);
-        });
-        const res = scheduleSequential(normalTasks, adjustedWeekMap);
-        normalPlan = res.plan;
-        const maxEnd = res.maxEnd || new Date(startDate);
-        const startMonday = startOfWeek(new Date(startDate));
-        const endMonday = startOfWeek(maxEnd);
-        const diffMs = endMonday - startMonday;
-        const weeksActual = Math.max(1, Math.round(diffMs / (7 * 86400000)) + 1);
-        finalWeeks = weeksActual;
-        if (weeksActual === weeksGuess) break;
-        weeksGuess = weeksActual;
-      }
-
-      const spreadPlan = [];
-      const projectStart = new Date(startDate);
-      const findDayWithCap = (weekStart) => {
-        let day = new Date(weekStart);
-        for (let i = 0; i < 7; i++) {
-          const dow = day.getDay();
-          if ((weeklyMap[dow] ?? 0) > 0) return new Date(day);
-          day.setDate(day.getDate() + 1);
-        }
-        return new Date(weekStart);
-      };
-
-      spreadTasks.forEach(t => {
-        const perWeek = (Number(t.time) || 0) / finalWeeks;
-        if (perWeek <= 0) return;
-        for (let w = 0; w < finalWeeks; w++) {
-          const rawStart = new Date(projectStart.getTime() + w * 7 * 86400000);
-          const weekStart = w === 0 ? projectStart : startOfWeek(rawStart);
-          const day = findDayWithCap(weekStart < projectStart ? projectStart : weekStart);
-          spreadPlan.push({
-            id: t.id,
-            phaseId: t.phaseId,
-            name: t.name,
-            hours: perWeek,
-            status: t.status || 'ToDo',
-            doneDate: t.doneDate,
-            start: day,
-            end: day,
-            parallel: !!t.parallel,
-            spread: true
-          });
-        }
-      });
-
-      const plan = [...normalPlan, ...spreadPlan].sort((a, b) => a.start - b.start || a.end - b.end);
-      const totalHours = normalTotal + spreadTotal;
-      const distinctDays = new Set(plan.flatMap(p => [p.start.toDateString(), p.end.toDateString()])).size;
-
-      return { plan, totalHours, days: distinctDays };
+      const { plan, days, totalHours } = scheduleSequential(orderedTasks, weeklyMap);
+      return { plan, totalHours, days };
     }
 
     function nextWorkDay(date, weeklyMap) {
@@ -862,76 +984,8 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function aggregatedPlan() {
-      const list = filteredPlan();
-      const map = new Map();
-      list.forEach(p => {
-        if (!p.spread) { map.set(p.id, p); return; }
-        const existing = map.get(p.id);
-        if (!existing) {
-          map.set(p.id, { ...p, __count: 1, startMin: p.start, endMax: p.end, totalHours: Number(p.hours) || 0 });
-        } else {
-          existing.totalHours = (Number(existing.totalHours) || 0) + (Number(p.hours) || 0);
-          existing.__count += 1;
-          if (p.start < existing.startMin) existing.startMin = p.start;
-          if (p.end > existing.endMax) existing.endMax = p.end;
-        }
-      });
-      return Array.from(map.values()).map(v => {
-        if (!v.spread) return v;
-        const perWeek = v.__count ? (v.totalHours / v.__count) : v.totalHours;
-        return {
-          id: v.id,
-          phaseId: v.phaseId,
-          name: v.name,
-          status: v.status,
-          doneDate: v.doneDate,
-          parallel: v.parallel,
-          spread: true,
-          hours: v.totalHours,
-          perWeek,
-          start: v.startMin,
-          end: v.endMax
-        };
-      });
+      return filteredPlan();
     }
-
-    // Drag & drop within phase (Phase view)
-    phaseView.addEventListener('dragstart', (e) => {
-      const row = e.target.closest('tr[data-id][draggable="true"]');
-      if (!row) return;
-      dragId = Number(row.dataset.id);
-      dragPhase = row.dataset.phaseRow;
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    phaseView.addEventListener('dragover', (e) => {
-      const row = e.target.closest('tr[data-id][draggable="true"]');
-      if (!row || dragId === null) return;
-      if (row.dataset.phaseRow !== dragPhase) return;
-      e.preventDefault();
-      row.classList.add('drag-over');
-    });
-    phaseView.addEventListener('dragleave', (e) => {
-      const row = e.target.closest('tr[data-id][draggable="true"]');
-      if (row) row.classList.remove('drag-over');
-    });
-    phaseView.addEventListener('drop', async (e) => {
-      const targetRow = e.target.closest('tr[data-id][draggable="true"]');
-      if (!targetRow || dragId === null) return;
-      if (targetRow.dataset.phaseRow !== dragPhase) { dragId = null; dragPhase = null; return; }
-      e.preventDefault();
-      targetRow.classList.remove('drag-over');
-      const rows = Array.from(phaseView.querySelectorAll(`tr[data-phase-row="${dragPhase}"]`));
-      const orderedIds = rows.map(r => Number(r.dataset.id));
-      const dragIndex = orderedIds.indexOf(dragId);
-      const targetIndex = orderedIds.indexOf(Number(targetRow.dataset.id));
-      if (dragIndex > -1 && targetIndex > -1 && dragIndex !== targetIndex) {
-        orderedIds.splice(dragIndex,1);
-        orderedIds.splice(targetIndex,0,dragId);
-        await updatePhaseOrder(dragPhase === 'none' ? null : Number(dragPhase), orderedIds);
-      }
-      dragId = null;
-      dragPhase = null;
-    });
 
     async function updatePhaseSequence(orderedIds) {
       try {
@@ -1020,20 +1074,25 @@ const params = new URLSearchParams(window.location.search);
       }
     });
 
-    async function updatePhaseOrder(phaseId, orderedIds) {
-      for (let i=0;i<orderedIds.length;i++){
-        const id = orderedIds[i];
-        const pkg = packages.find(p => p.id === id);
-        if (!pkg) continue;
-        if (pkg.sortIndex === i) continue;
-        const res = await apiRequest(`/workPackages/${id}`, {
-          method: 'PUT',
-          body: { ...pkg, sortIndex: i }
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        pkg.sortIndex = i;
+    async function updateGlobalOrder(orderedIds) {
+      try {
+        for (let i = 0; i < orderedIds.length; i++) {
+          const id = orderedIds[i];
+          const pkg = packages.find(p => p.id === id);
+          if (!pkg) continue;
+          if (pkg.sortIndex === i) continue;
+          const res = await apiRequest(`/workPackages/${id}`, {
+            method: 'PUT',
+            body: { ...pkg, sortIndex: i }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          pkg.sortIndex = i;
+        }
+        await refreshPlan();
+        setStatus('Reihenfolge gespeichert.');
+      } catch (err) {
+        setStatus('Sortierung konnte nicht gespeichert werden (' + err.message + ').', true);
       }
-      await refreshPlan();
     }
 
     function renderPlan() {
@@ -1099,6 +1158,11 @@ const params = new URLSearchParams(window.location.search);
       renderKanbanBoard();
       const forecastActive = document.getElementById('top-forecast')?.classList.contains('active');
       if (forecastActive) renderForecast();
+      if (!suppressRebalance) {
+        await rebalanceRecurring();
+      } else {
+        suppressRebalance = false;
+      }
       setStatus('Zeitplan berechnet.');
     }
 
@@ -1131,6 +1195,48 @@ const params = new URLSearchParams(window.location.search);
         const id = Number(delBtn.dataset.delete);
         deletePackage(id);
       }
+    });
+
+    // Drag & drop in Plan view for global ordering
+    let dragPlanId = null;
+    rows.addEventListener('dragstart', (e) => {
+      const row = e.target.closest('tr[data-task-id][draggable="true"]');
+      if (!row) return;
+      dragPlanId = Number(row.dataset.taskId);
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    rows.addEventListener('dragend', () => {
+      dragPlanId = null;
+      rows.querySelectorAll('.drag-over, .dragging').forEach(r => r.classList.remove('drag-over', 'dragging'));
+    });
+    rows.addEventListener('dragover', (e) => {
+      const row = e.target.closest('tr[data-task-id][draggable="true"]');
+      if (!row || dragPlanId === null) return;
+      e.preventDefault();
+      row.classList.add('drag-over');
+    });
+    rows.addEventListener('dragleave', (e) => {
+      const row = e.target.closest('tr[data-task-id][draggable="true"]');
+      if (row) row.classList.remove('drag-over');
+    });
+    rows.addEventListener('drop', async (e) => {
+      const target = e.target.closest('tr[data-task-id][draggable="true"]');
+      if (!target || dragPlanId === null) return;
+      e.preventDefault();
+      const list = Array.from(rows.querySelectorAll('tr[data-task-id][draggable=\"true\"]'));
+      const fromIdx = list.findIndex(r => Number(r.dataset.taskId) === dragPlanId);
+      const toIdx = list.findIndex(r => r === target);
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+      const moving = list[fromIdx];
+      if (fromIdx < toIdx) {
+        rows.insertBefore(moving, list[toIdx].nextSibling);
+      } else {
+        rows.insertBefore(moving, list[toIdx]);
+      }
+      rows.querySelectorAll('.drag-over, .dragging').forEach(r => r.classList.remove('drag-over', 'dragging'));
+      const orderedIds = Array.from(rows.querySelectorAll('tr[data-task-id]')).map(r => Number(r.dataset.taskId));
+      await updateGlobalOrder(orderedIds);
     });
 
     // Action buttons in "Nach Phase" view
@@ -1244,12 +1350,29 @@ const params = new URLSearchParams(window.location.search);
     async function deletePackage(id) {
       const pkg = packages.find(p => p.id === id);
       if (!pkg) return;
-      if (!window.confirm(`Arbeitspaket \"${pkg.name}\" Loeschen?`)) return;
+      let deleteGroup = false;
+      if (pkg.recurringGroup) {
+        const all = window.confirm(`Arbeitspaket "${pkg.name}" ist Teil einer wiederkehrenden Serie.\nOK: gesamte Serie löschen\nAbbrechen: nur dieses Paket löschen`);
+        deleteGroup = all;
+      } else {
+        if (!window.confirm(`Arbeitspaket \"${pkg.name}\" loeschen?`)) return;
+      }
       try {
-        const res = await apiRequest(`/workPackages/${id}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (deleteGroup) {
+          const res = await apiRequest(`/workPackages?recurringGroup=${encodeURIComponent(pkg.recurringGroup)}`);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const list = await res.json();
+          for (const wp of list) {
+            const del = await apiRequest(`/workPackages/${wp.id}`, { method: 'DELETE' });
+            if (!del.ok) throw new Error('HTTP ' + del.status);
+          }
+          setStatus('Serie geloescht.');
+        } else {
+          const res = await apiRequest(`/workPackages/${id}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          setStatus('Arbeitspaket geloescht.');
+        }
         await refreshPlan();
-        setStatus('Arbeitspaket geloescht.');
       } catch (err) {
         setStatus('Loeschen fehlgeschlagen (' + err.message + ').', true);
       }
@@ -1303,8 +1426,12 @@ const params = new URLSearchParams(window.location.search);
       taskDesc.value = pkg?.description || '';
       taskStatus.value = pkg?.status || 'ToDo';
       taskParallel.checked = !!pkg?.parallel;
-      taskSpread.checked = !!pkg?.spread;
       taskTime.value = pkg?.time ?? 0;
+      if (taskRecurring) taskRecurring.checked = false;
+      if (taskRecurringWrap) taskRecurringWrap.style.display = 'none';
+      if (taskRecurringIntervalWrap) taskRecurringIntervalWrap.style.display = 'none';
+      if (taskRecurringCount) taskRecurringCount.value = '';
+      if (taskRecurringInterval) taskRecurringInterval.value = '';
       const selectedPhase = pkg?.phaseId ?? '';
       taskPhase.innerHTML = `<option value="">(keine Phase)</option>` + phases.map(p => `<option value="${p.id}" ${p.id === selectedPhase ? 'selected' : ''}>${p.name}</option>`).join('');
       resetCriteriaForm(pkg?.acceptanceCriteria || []);
@@ -1333,7 +1460,6 @@ const params = new URLSearchParams(window.location.search);
       detailPhase.textContent = resolvePhaseName(pkg.phaseId);
       detailId.textContent = pkg.id ?? '-';
       detailParallel.textContent = pkg.parallel ? 'Ja' : 'Nein';
-      detailSpread.textContent = pkg.spread ? 'Ja' : 'Nein';
       detailStatus.innerHTML = statusChip(pkg.status || 'ToDo');
       detailStatusPlain.textContent = statusLabel(pkg.status);
       detailHours.textContent = `${pkg.time ?? '-'} h`;
@@ -1361,11 +1487,10 @@ const params = new URLSearchParams(window.location.search);
       }
       rows.innerHTML = list.map(p => {
         const warn = (p.phaseId === null || p.phaseId === undefined) ? `<span class="warn">!</span>` : '';
-        const spread = p.spread ? `<span class="pill pill-ghost">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : '';
         return `
-        <tr class="task-row" data-task-id="${p.id}">
+        <tr class="task-row" draggable="true" data-task-id="${p.id}">
           <td>${resolvePhase(p.phaseId)}</td>
-          <td>${p.name} ${warn} ${spread}</td>
+          <td>${p.name} ${warn}</td>
           <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
           <td>${fmt(p.start)}</td>
@@ -1412,8 +1537,8 @@ const params = new URLSearchParams(window.location.search);
         const title = phaseName(key);
         const showWarn = key === 'none';
         const rowsHtml = list.map(p => `
-          <tr draggable="true" class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
-            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''} ${p.spread ? `<span class=\"pill pill-ghost\">Projektweit${p.perWeek ? ` (${p.perWeek.toFixed(1)} h/Woche)` : ''}</span>` : ''}</td>
+          <tr class="task-row" data-phase-row="${p.phaseId ?? 'none'}" data-id="${p.id}">
+            <td>${p.name} ${showWarn ? '<span class="warn">!</span>' : ''}</td>
             <td>${statusChip(p.status || 'ToDo')}</td>
           <td>${p.hours}</td>
             <td>${fmt(p.start)}</td>
@@ -1448,8 +1573,15 @@ const params = new URLSearchParams(window.location.search);
         return;
       }
       kanbanPhaseSelect.innerHTML = phases.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
-      const found = phases.find(p => String(p.id) === previous);
-      kanbanPhaseSelect.value = found ? previous : (phases[0]?.id ?? '');
+      const hasPrevious = phases.some(p => String(p.id) === previous);
+      if (hasPrevious) {
+        kanbanPhaseSelect.value = previous;
+      } else {
+        const firstOpen = phases.find(p =>
+          packages.some(pkg => pkg.phaseId === p.id && (pkg.status || 'Backlog') !== 'Finished')
+        );
+        kanbanPhaseSelect.value = (firstOpen?.id ?? phases[0]?.id ?? '').toString();
+      }
     }
 
     function renderKanbanBoard() {
@@ -1742,7 +1874,7 @@ const params = new URLSearchParams(window.location.search);
         const rowIndex = new Map();
         let rowCount = 0;
         const rowsForItems = items.map(t => {
-          const key = t.spread ? `spread-${t.id}` : `task-${t.id}`;
+          const key = `task-${t.id}`;
           if (!rowIndex.has(key)) rowIndex.set(key, rowCount++);
           return rowIndex.get(key);
         });
@@ -2360,6 +2492,14 @@ async function exportChartAsPng() {
     criteriaAddBtn?.addEventListener('click', () => addCriteriaRow());
     inlineCriteriaAddBtn?.addEventListener('click', () => addCriteriaRow('', false, inlineCriteriaList));
     resetCriteriaForm([], inlineCriteriaList);
+    taskRecurring?.addEventListener('change', () => {
+      if (taskRecurringWrap) taskRecurringWrap.style.display = taskRecurring.checked ? 'block' : 'none';
+      if (taskRecurringIntervalWrap) taskRecurringIntervalWrap.style.display = taskRecurring.checked ? 'block' : 'none';
+    });
+    inlineTaskRecurring?.addEventListener('change', () => {
+      if (inlineTaskRecurringWrap) inlineTaskRecurringWrap.style.display = inlineTaskRecurring.checked ? 'block' : 'none';
+      if (inlineTaskRecurringIntervalWrap) inlineTaskRecurringIntervalWrap.style.display = inlineTaskRecurring.checked ? 'block' : 'none';
+    });
 
     taskForm.addEventListener('submit', async (evt) => {
       evt.preventDefault();
@@ -2371,17 +2511,23 @@ async function exportChartAsPng() {
         time: Number(taskTime.value),
         status: taskStatus.value || 'Backlog',
         parallel: taskParallel.checked,
-        spread: taskSpread.checked,
         acceptanceCriteria: collectCriteriaFromForm()
       };
-      if (!payload.name) {
-        setStatus('Name darf nicht leer sein.', true);
+      const isRecurring = taskRecurring?.checked;
+      const recurCount = Number(taskRecurringCount?.value || 0);
+      const recurInterval = Number(taskRecurringInterval?.value || 0);
+
+      if (!payload.name) { setStatus('Name darf nicht leer sein.', true); return; }
+      if (Number.isNaN(payload.time)) { setStatus('Bitte gueltige Stunden angeben.', true); return; }
+      if (isRecurring && (recurCount < 2 || !Number.isFinite(recurCount))) {
+        setStatus('Bitte Anzahl Vorkommen (>=2) angeben.', true);
         return;
       }
-      if (Number.isNaN(payload.time)) {
-        setStatus('Bitte gueltige Stunden angeben.', true);
+      if (isRecurring && (recurInterval < 1 || !Number.isFinite(recurInterval))) {
+        setStatus('Bitte Intervall (>=1) angeben.', true);
         return;
       }
+
       const hasCriteria = payload.acceptanceCriteria.length > 0;
       const allCriteriaDone = payload.acceptanceCriteria.every(c => c.done);
       if (payload.status === 'Finished' && hasCriteria && !allCriteriaDone) {
@@ -2412,14 +2558,21 @@ async function exportChartAsPng() {
           }
           const res = await apiRequest(`/workPackages/${editingId}`, {
             method: 'PUT',
-            body: { id: editingId, ...payload, doneDate }
+            body: { ...existing, ...payload, id: editingId, doneDate }
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
+        } else if (isRecurring) {
+          await createRecurringPackages({
+            ...payload,
+            recurringInterval: recurInterval,
+            recurringGroup: `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`,
+            recurringTotal: recurCount
+          }, recurCount);
         } else {
           const doneDate = payload.status === 'Finished' ? new Date().toISOString() : null;
           const res = await apiRequest('/workPackages', {
             method: 'POST',
-            body: { ...payload, doneDate }
+            body: { ...payload, doneDate, sortIndex: nextSortStart() }
           });
           if (!res.ok) throw new Error('HTTP ' + res.status);
         }
@@ -2445,8 +2598,6 @@ async function exportChartAsPng() {
     });
 
     let isFullscreen = false;
-    let dragId = null;
-    let dragPhase = null;
     chartPrev.addEventListener('click', () => {
       chartIndex = (chartIndex - 1 + chartTypes.length) % chartTypes.length;
       renderChart();
@@ -2741,20 +2892,52 @@ async function exportChartAsPng() {
         name: inlineTaskName.value.trim(),
         description: inlineTaskDesc.value.trim(),
         status: inlineTaskStatus.value || 'Backlog',
+        recurring: inlineTaskRecurring?.checked,
+        recurringCount: Number(inlineTaskRecurringCount?.value || 0),
+        recurringInterval: Number(inlineTaskRecurringInterval?.value || 0),
         parallel: inlineTaskParallel.checked,
-        spread: inlineTaskSpread.checked,
         time: Number(inlineTaskTime.value),
         acceptanceCriteria: collectCriteriaFromForm(inlineCriteriaList)
       };
       if (!payload.name) { setStatus('Bitte Aufgabennamen angeben.', true); return; }
       if (Number.isNaN(payload.time)) { setStatus('Bitte Stunden angeben.', true); return; }
+      if (payload.recurring && (!Number.isFinite(payload.recurringCount) || payload.recurringCount < 2)) {
+        setStatus('Bitte Anzahl Vorkommen (>=2) angeben.', true);
+        return;
+      }
+      if (payload.recurring && (!Number.isFinite(payload.recurringInterval) || payload.recurringInterval < 1)) {
+        setStatus('Bitte Intervall (>=1) angeben.', true);
+        return;
+      }
       try {
-        const res = await apiRequest('/workPackages', {
-          method: 'POST',
-          body: payload
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (payload.recurring) {
+          await createRecurringPackages({
+            projectId,
+            phaseId: payload.phaseId,
+            name: payload.name,
+            description: payload.description,
+            status: payload.status,
+            parallel: payload.parallel,
+            time: payload.time,
+            acceptanceCriteria: payload.acceptanceCriteria,
+            recurringInterval: payload.recurringInterval,
+            recurringGroup: `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}`,
+            recurringTotal: payload.recurringCount
+          }, payload.recurringCount);
+        } else {
+          const res = await apiRequest('/workPackages', {
+            method: 'POST',
+            body: {
+              ...payload,
+              sortIndex: nextSortStart(),
+              doneDate: payload.status === 'Finished' ? new Date().toISOString() : null
+            }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+        }
         inlineTaskForm.reset();
+        if (inlineTaskRecurringWrap) inlineTaskRecurringWrap.style.display = 'none';
+        if (inlineTaskRecurringIntervalWrap) inlineTaskRecurringIntervalWrap.style.display = 'none';
         renderTaskPhaseOptions();
         await refreshPlan();
         setStatus('Arbeitspaket gespeichert.');

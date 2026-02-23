@@ -159,10 +159,18 @@
               </select>
             </label>
             <label class="check-row">
-              <input id="inline-task-parallel" type="checkbox"> Parallel
+              <input id="inline-task-recurring" type="checkbox"> Wiederkehrend gleichmäßig über das Projekt verteilen
+            </label>
+            <label id="inline-task-recurring-count-wrap" style="display:none;">
+              Anzahl Vorkommen
+              <input id="inline-task-recurring-count" type="number" min="2" step="1" placeholder="z.B. 14">
+            </label>
+            <label id="inline-task-recurring-interval-wrap" style="display:none;">
+              Alle wie viele Arbeitspakete einfügen?
+              <input id="inline-task-recurring-interval" type="number" min="1" step="1" placeholder="Standard: 10">
             </label>
             <label class="check-row">
-              <input id="inline-task-spread" type="checkbox"> Auf das gesamte Projekt aufteilen
+              <input id="inline-task-parallel" type="checkbox"> Parallel
             </label>
             <label>Stunden
               <input id="inline-task-time" type="number" min="0" step="0.5" required>
@@ -437,12 +445,20 @@
           </select>
         </label>
         <label class="check-row">
-          <input id="task-parallel" type="checkbox">
-          Parallel
+          <input id="task-recurring" type="checkbox">
+          Wiederkehrend gleichmäßig über das Projekt verteilen
+        </label>
+        <label id="task-recurring-count-wrap" style="display:none;">
+          Anzahl Vorkommen
+          <input id="task-recurring-count" type="number" min="2" step="1" placeholder="z.B. 14">
+        </label>
+        <label id="task-recurring-interval-wrap" style="display:none;">
+          Alle wie viele Arbeitspakete einfügen?
+          <input id="task-recurring-interval" type="number" min="1" step="1" placeholder="Standard: 10">
         </label>
         <label class="check-row">
-          <input id="task-spread" type="checkbox">
-          Auf das gesamte Projekt aufteilen
+          <input id="task-parallel" type="checkbox">
+          Parallel
         </label>
         <label>Stunden
           <input id="task-time" type="number" min="0" step="0.5" required>
@@ -470,7 +486,6 @@
         <span class="pill">Phase: <strong id="detail-phase">-</strong></span>
         <span class="pill">ID: <strong id="detail-id">-</strong></span>
         <span class="pill">Parallel: <strong id="detail-parallel">-</strong></span>
-        <span class="pill">Projektweit: <strong id="detail-spread">-</strong></span>
       </div>
       <div class="detail-grid">
         <div>
