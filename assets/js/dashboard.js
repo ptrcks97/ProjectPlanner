@@ -21,10 +21,12 @@ const params = new URLSearchParams(window.location.search);
     const tabPhases = document.getElementById('tab-phases');
     const tabWeek = document.getElementById('tab-week');
     const tabStart = document.getElementById('tab-start');
+    const tabMilestones = document.getElementById('tab-milestones');
     const tabTask = document.getElementById('tab-task');
     const panelPhases = document.getElementById('panel-phases');
     const panelWeek = document.getElementById('panel-week');
     const panelStart = document.getElementById('panel-start');
+    const panelMilestones = document.getElementById('panel-milestones');
     const panelTask = document.getElementById('panel-task');
 
     const viewButtons = Array.from(document.querySelectorAll('.view-btn'));
@@ -131,6 +133,13 @@ const params = new URLSearchParams(window.location.search);
     const inlineTaskParallel = document.getElementById('inline-task-parallel');
     const inlineTaskTime = document.getElementById('inline-task-time');
     const reloadBtn = document.getElementById('reload-btn');
+    const milestoneForm = document.getElementById('milestone-form');
+    const msTitle = document.getElementById('ms-title');
+    const msDesc = document.getElementById('ms-desc');
+    const msDate = document.getElementById('ms-date');
+    const msId = document.getElementById('ms-id');
+    const msRows = document.getElementById('milestone-rows');
+    const milestoneStrip = document.getElementById('milestone-strip');
     let editingId = null;
 
     // Phase form elements
@@ -211,6 +220,7 @@ const params = new URLSearchParams(window.location.search);
     let phases = [];
     let phaseListDragId = null;
     let packages = [];
+    let milestones = [];
     let weekly = null;
     let startStr = null;
     let planCache = [];
@@ -327,10 +337,23 @@ const params = new URLSearchParams(window.location.search);
       title.textContent = p.name;
     }
 
+    async function fetchJsonWithRetry(url, tries = 3, delayMs = 120) {
+      let lastErr;
+      for (let i = 0; i < tries; i++) {
+        try {
+          const res = await apiRequest(url);
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return await res.json();
+        } catch (err) {
+          lastErr = err;
+          if (i < tries - 1) await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+      throw lastErr;
+    }
+
     async function loadStart() {
-      const res = await apiRequest(`/projectStarts?projectId=${projectId}`);
-      if (!res.ok) return;
-      const arr = await res.json();
+      const arr = await fetchJsonWithRetry(`/projectStarts?projectId=${projectId}`);
       if (!arr.length) {
         startStr = null;
         startDateInput.value = '';
@@ -345,9 +368,7 @@ const params = new URLSearchParams(window.location.search);
     }
 
     async function loadWeekly() {
-      const res = await apiRequest(`/weeklyPlans?projectId=${projectId}`);
-      if (!res.ok) return null;
-      const arr = await res.json();
+      const arr = await fetchJsonWithRetry(`/weeklyPlans?projectId=${projectId}`);
       weekly = arr[0] || null;
       if (weekly) {
         Object.entries(weekInputs).forEach(([k, input]) => {
@@ -364,9 +385,7 @@ const params = new URLSearchParams(window.location.search);
     }
 
     async function loadPhases() {
-      const res = await apiRequest(`/phases?projectId=${projectId}`);
-      if (!res.ok) return;
-      const arr = await res.json();
+      const arr = await fetchJsonWithRetry(`/phases?projectId=${projectId}`);
       const normalized = arr.map((p, idx) => ({
         ...p,
         sortIndex: Number.isFinite(Number(p.sortIndex)) ? Number(p.sortIndex) : (Number(p.id ?? idx) || idx)
@@ -378,9 +397,7 @@ const params = new URLSearchParams(window.location.search);
     }
 
     async function loadPackages() {
-      const res = await apiRequest(`/workPackages`);
-      if (!res.ok) return;
-      const arr = await res.json();
+      const arr = await fetchJsonWithRetry(`/workPackages`);
       const phaseIds = new Set(phases.map(p => p.id));
       packages = arr
         .filter(w => w.projectId === projectId || phaseIds.has(w.phaseId))
@@ -391,6 +408,16 @@ const params = new URLSearchParams(window.location.search);
             : []
         }));
       renderJournalPackageOptions();
+    }
+
+    async function loadMilestones() {
+      const arr = await fetchJsonWithRetry(`/milestones?projectId=${projectId}`);
+      milestones = arr
+        .filter(m => m.projectId === projectId)
+        .map(m => ({ ...m, date: m.date || m.targetDate || null }))
+        .sort((a, b) => new Date(a.date || '2100-01-01') - new Date(b.date || '2100-01-01'));
+      renderMilestoneList();
+      renderMilestoneStrip();
     }
 
     function nextSortStart() {
@@ -508,6 +535,21 @@ const params = new URLSearchParams(window.location.search);
       if (isRebalancingRecurring) return;
       isRebalancingRecurring = true;
       try {
+        const apiRetry = async (fn, tries = 2, delayMs = 120) => {
+          let lastErr;
+          for (let i = 0; i < tries; i++) {
+            try {
+              const res = await fn();
+              if (!res) throw new Error('Keine Antwort');
+              return res;
+            } catch (err) {
+              lastErr = err;
+              if (i < tries - 1) await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+          throw lastErr;
+        };
+
         const list = [...packages].sort((a, b) => {
           const sa = Number.isFinite(Number(a.sortIndex)) ? Number(a.sortIndex) : Number.MAX_SAFE_INTEGER;
           const sb = Number.isFinite(Number(b.sortIndex)) ? Number(b.sortIndex) : Number.MAX_SAFE_INTEGER;
@@ -554,21 +596,24 @@ const params = new URLSearchParams(window.location.search);
         const updates = [];
         baseOrder.forEach((pkg, idx) => {
           if (pkg.sortIndex !== idx) {
-            updates.push(apiRequest(`/workPackages/${pkg.id}`, {
-              method: 'PUT',
-              body: { ...pkg, sortIndex: idx }
-            }));
+            updates.push({ id: pkg.id, body: { ...pkg, sortIndex: idx } });
             pkg.sortIndex = idx;
           }
         });
         if (updates.length) {
-          const res = await Promise.all(updates);
-          if (res.some(r => !r.ok)) throw new Error('Rebalance HTTP ' + (res.find(r => !r.ok)?.status || '?'));
+          for (const u of updates) {
+            const res = await apiRetry(() => apiRequest(`/workPackages/${u.id}`, {
+              method: 'PUT',
+              body: u.body
+            }));
+            if (!res.ok) throw new Error('Rebalance HTTP ' + res.status);
+          }
           suppressRebalance = true;
           await refreshPlan();
         }
       } catch (err) {
         console.error('[recurring] rebalance failed', err);
+        setStatus('Rebalance der wiederkehrenden Pakete übersprungen (Netzwerkfehler).', true);
       } finally {
         isRebalancingRecurring = false;
       }
@@ -665,6 +710,40 @@ const params = new URLSearchParams(window.location.search);
       }
     }
 
+    function renderMilestoneList() {
+      if (!msRows) return;
+      if (!milestones.length) {
+        msRows.innerHTML = '<div class="muted">Keine Meilensteine.</div>';
+        return;
+      }
+      msRows.innerHTML = milestones.map(m => `
+        <div class="chip-row" data-ms-id="${m.id}" style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px; border:1px solid #1d4ed833; padding:8px 10px; border-radius:8px;">
+          <div>
+            <div style="font-weight:600;">${m.title}</div>
+            <div class="muted" style="font-size:12px;">${m.date ? new Date(m.date).toLocaleDateString('de-CH') : '-'}</div>
+            ${m.description ? `<div class="muted" style="font-size:12px;">${m.description}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button class="icon-square" data-edit-ms="${m.id}" title="Bearbeiten"><span class="material-symbols-rounded">edit</span></button>
+            <button class="icon-square danger" data-del-ms="${m.id}" title="Löschen"><span class="material-symbols-rounded">delete</span></button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function renderMilestoneStrip() {
+      if (!milestoneStrip) return;
+      if (!milestones.length) {
+        milestoneStrip.innerHTML = '<span class="chip muted">Keine Meilensteine</span>';
+        return;
+      }
+      milestoneStrip.innerHTML = milestones.map(m => `
+        <span class="chip" style="background:#0ea5e915;border:1px solid #0ea5e9aa;color:#0ea5e9;">
+          ◇ ${m.title} — ${m.date ? new Date(m.date).toLocaleDateString('de-CH') : '-'}
+        </span>
+      `).join('');
+    }
+
     function renderJournalPackageOptions() {
       if (!journalPackageSelect) return;
       if (!packages.length) {
@@ -684,6 +763,17 @@ const params = new URLSearchParams(window.location.search);
       localStorage.setItem(journalKey(), JSON.stringify(journalEntries));
     }
 
+    function getSortedJournalEntries() {
+      return journalEntries
+        .map((entry, index) => ({ entry, index }))
+        .sort((a, b) => {
+          const da = Date.parse(a.entry?.date || '') || 0;
+          const db = Date.parse(b.entry?.date || '') || 0;
+          if (db !== da) return db - da; // neueste Einträge zuerst
+          return a.index - b.index; // stabiler Fallback
+        });
+    }
+
     function renderJournal() {
       if (!journalRows) return;
       if (!journalEntries.length) {
@@ -693,7 +783,8 @@ const params = new URLSearchParams(window.location.search);
         if (journalSumCell) journalSumCell.textContent = '0.00';
         return;
       }
-      journalRows.innerHTML = journalEntries.map((entry, idx) => `
+      const sorted = getSortedJournalEntries();
+      journalRows.innerHTML = sorted.map(({ entry, index }) => `
         <tr>
           <td>${entry.title}</td>
           <td>${entry.description}</td>
@@ -702,8 +793,8 @@ const params = new URLSearchParams(window.location.search);
           <td>${entry.hours}</td>
           <td>${entry.date}</td>
           <td>
-            <button class="ghost" data-edit-journal="${idx}">Bearbeiten</button>
-            <button class="ghost" data-remove="${idx}" style="margin-left:6px;">Löschen</button>
+            <button class="ghost" data-edit-journal="${index}">Bearbeiten</button>
+            <button class="ghost" data-remove="${index}" style="margin-left:6px;">Löschen</button>
           </td>
         </tr>
       `).join('');
@@ -746,7 +837,7 @@ const params = new URLSearchParams(window.location.search);
       const header = reduced
         ? ['Titel', 'Beschreibung', 'Datum', 'Stunden']
         : ['Titel', 'Beschreibung', 'Phase', 'Arbeitspaket', 'Stunden', 'Datum'];
-      const rows = journalEntries.map(e => reduced
+      const rows = getSortedJournalEntries().map(({ entry: e }) => reduced
         ? [
             e.title,
             (e.description || '').replace(/"/g, '""'),
@@ -787,7 +878,7 @@ const params = new URLSearchParams(window.location.search);
           th { background:#0ea5e9; color:#0b1224; }
           .chip { padding:3px 8px; border-radius:10px; background:#122033; color:#e2e8f0; border:1px solid #1f2c3f; }
         </style>`;
-      const rows = journalEntries.map(e => `
+      const rows = getSortedJournalEntries().map(({ entry: e }) => `
         <tr>
           <td>${e.title}</td>
           <td>${e.description}</td>
@@ -821,7 +912,7 @@ const params = new URLSearchParams(window.location.search);
       ];
       lines.push('| Kurz | Beschreibung | Phase | Arbeitspaket | Stunden | Datum |');
       lines.push('| --- | --- | --- | --- | --- | --- |');
-      journalEntries.forEach(e => {
+      getSortedJournalEntries().forEach(({ entry: e }) => {
         lines.push(`| ${e.title} | ${(e.description || '').replace(/\\n/g, ' ')} | ${e.phase || ''} | ${e.packageName || ''} | ${e.hours} | ${e.date} |`);
       });
       downloadFile(`journal-${projectId || 'projekt'}.md`, 'text/markdown;charset=utf-8', lines.join('\\n'));
@@ -1151,8 +1242,9 @@ const params = new URLSearchParams(window.location.search);
       await loadStart();
       await loadWeekly();
       if (!weekly) setStatus('Kein Wochenplan hinterlegt, nutze 0h pro Tag.', true);
-      await loadPhases();
-      await loadPackages();
+      try { await loadPhases(); } catch (err) { setStatus('Phasen konnten nicht geladen werden (' + err.message + ').', true); return; }
+      try { await loadPackages(); } catch (err) { setStatus('Pakete konnten nicht geladen werden (' + err.message + ').', true); return; }
+      try { await loadMilestones(); } catch (err) { setStatus('Meilensteine konnten nicht geladen werden (' + err.message + ').', true); return; }
       renderPlan();
       renderKanbanPhaseOptions();
       renderKanbanBoard();
@@ -1295,6 +1387,69 @@ const params = new URLSearchParams(window.location.search);
       row.classList.add('drag-over');
     });
 
+    milestoneForm?.addEventListener('submit', async (evt) => {
+      evt.preventDefault();
+      const payload = {
+        projectId,
+        title: msTitle.value.trim(),
+        description: msDesc.value.trim(),
+        date: msDate.value
+      };
+      if (!payload.title || !payload.date) {
+        setStatus('Titel und Datum sind Pflicht.', true);
+        return;
+      }
+      try {
+        if (msId.value) {
+          const id = Number(msId.value);
+          const existing = milestones.find(m => m.id === id) || {};
+          const res = await apiRequest(`/milestones/${id}`, {
+            method: 'PUT',
+            body: { ...existing, ...payload, id }
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+        } else {
+          const res = await apiRequest('/milestones', {
+            method: 'POST',
+            body: payload
+          });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+        }
+        milestoneForm.reset();
+        msId.value = '';
+        await loadMilestones();
+        await refreshPlan();
+      } catch (err) {
+        setStatus('Meilenstein konnte nicht gespeichert werden (' + err.message + ').', true);
+      }
+    });
+
+    msRows?.addEventListener('click', async (e) => {
+      const editBtn = e.target.closest('[data-edit-ms]');
+      const delBtn = e.target.closest('[data-del-ms]');
+      if (!editBtn && !delBtn) return;
+      const id = Number(editBtn?.dataset.editMs || delBtn?.dataset.delMs);
+      const ms = milestones.find(m => m.id === id);
+      if (!ms) return;
+      if (editBtn) {
+        msTitle.value = ms.title || '';
+        msDesc.value = ms.description || '';
+        msDate.value = ms.date ? ms.date.slice(0,10) : '';
+        msId.value = ms.id;
+        setTab('milestones');
+      } else if (delBtn) {
+        if (!window.confirm(`Meilenstein "${ms.title}" löschen?`)) return;
+        try {
+          const res = await apiRequest(`/milestones/${id}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          await loadMilestones();
+          await refreshPlan();
+        } catch (err) {
+          setStatus('Loeschen fehlgeschlagen (' + err.message + ').', true);
+        }
+      }
+    });
+
     phaseRows.addEventListener('dragleave', (e) => {
       const row = e.target.closest('.phase-row[draggable="true"]');
       if (row) row.classList.remove('drag-over');
@@ -1327,14 +1482,16 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function setTab(tab) {
-      [panelPhases, panelWeek, panelStart, panelTask].forEach(p => p.classList.add('hidden'));
-      [tabPhases, tabWeek, tabStart, tabTask].forEach(b => b.classList.remove('active'));
+      [panelPhases, panelWeek, panelStart, panelTask, panelMilestones].forEach(p => p?.classList.add('hidden'));
+      [tabPhases, tabWeek, tabStart, tabTask, tabMilestones].forEach(b => b?.classList.remove('active'));
       if (tab === 'start') {
         panelStart.classList.remove('hidden'); tabStart.classList.add('active');
       } else if (tab === 'week') {
         panelWeek.classList.remove('hidden'); tabWeek.classList.add('active');
       } else if (tab === 'phases') {
         panelPhases.classList.remove('hidden'); tabPhases.classList.add('active');
+      } else if (tab === 'milestones') {
+        panelMilestones.classList.remove('hidden'); tabMilestones.classList.add('active');
       } else if (tab === 'task') {
         panelTask.classList.remove('hidden'); tabTask.classList.add('active');
       }
@@ -1344,6 +1501,7 @@ const params = new URLSearchParams(window.location.search);
     tabWeek.addEventListener('click', () => setTab('week'));
     tabStart.addEventListener('click', () => setTab('start'));
     tabTask.addEventListener('click', () => setTab('task'));
+    tabMilestones.addEventListener('click', () => setTab('milestones'));
     // ensure initial panel matches reordered buttons
     setTab('week');
 
@@ -1816,8 +1974,11 @@ const params = new URLSearchParams(window.location.search);
         chartContainer.innerHTML = '<div class="muted">Keine Daten fuer Diagramm.</div>';
         return;
       }
-      const minStart = new Date(Math.min(...planCache.map(p => p.start)));
-      const maxEnd = new Date(Math.max(...planCache.map(p => p.end)));
+      const planMin = new Date(Math.min(...planCache.map(p => p.start)));
+      const planMax = new Date(Math.max(...planCache.map(p => p.end)));
+      const msDates = milestones.map(m => new Date(m.date));
+      const minStart = msDates.length ? new Date(Math.min(planMin, ...msDates)) : planMin;
+      const maxEnd = msDates.length ? new Date(Math.max(planMax, ...msDates)) : planMax;
       const days = [];
       for (let d = new Date(minStart); d <= maxEnd; d.setDate(d.getDate() + 1)) {
         days.push(new Date(d));
@@ -1925,6 +2086,14 @@ const params = new URLSearchParams(window.location.search);
             </div>
           </div>
           ${barsHtml}
+          ${milestones.length ? `<div class="gantt-milestones" style="position:absolute; inset:0; pointer-events:none;">${
+            milestones.map(m => {
+              const d = new Date(m.date);
+              const offset = (d - minStart) / 86400000;
+              const left = Math.max(0, Math.min(100, (offset / totalDays) * 100));
+              return `<div title="${m.title} (${d.toLocaleDateString('de-CH')})" style="position:absolute;top:8px;left:${left}%;transform:translateX(-50%);color:#f97316;font-size:14px;">◆</div>`;
+            }).join('')
+          }</div>` : ''}
         </div>
       `;
       const root = document.getElementById('gantt-root');
@@ -1937,8 +2106,11 @@ const params = new URLSearchParams(window.location.search);
         chartContainer.innerHTML = '<div class="muted">Keine Daten fuer Diagramm.</div>';
         return;
       }
-      const minStart = new Date(Math.min(...list.map(p => p.start)));
-      const maxEnd = new Date(Math.max(...list.map(p => p.end)));
+      const planMin = new Date(Math.min(...list.map(p => p.start)));
+      const planMax = new Date(Math.max(...list.map(p => p.end)));
+      const msDates = milestones.map(m => new Date(m.date));
+      const minStart = msDates.length ? new Date(Math.min(planMin, ...msDates)) : planMin;
+      const maxEnd = msDates.length ? new Date(Math.max(planMax, ...msDates)) : planMax;
       const days = [];
       for (let d = new Date(minStart); d <= maxEnd; d.setDate(d.getDate() + 1)) days.push(new Date(d));
 
@@ -2037,6 +2209,14 @@ const params = new URLSearchParams(window.location.search);
             </div>
           </div>
           ${barsHtml}
+          ${milestones.length ? `<div class="gantt-milestones" style="position:absolute; inset:0; pointer-events:none;">${
+            milestones.map(m => {
+              const d = new Date(m.date);
+              const offset = (d - minStart) / 86400000;
+              const left = Math.max(0, Math.min(100, (offset / totalDays) * 100));
+              return `<div title="${m.title} (${d.toLocaleDateString('de-CH')})" style="position:absolute;top:8px;left:${left}%;transform:translateX(-50%);color:#f97316;font-size:14px;">◆</div>`;
+            }).join('')
+          }</div>` : ''}
         </div>
       `;
       const root = document.getElementById('gantt-root');
@@ -2149,6 +2329,8 @@ const params = new URLSearchParams(window.location.search);
       }
 
       const total = list.reduce((s, p) => s + (Number(p.hours) || 0), 0);
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0,10);
 
       // ideal line: subtract daily capacity
       let idealRem = total;
@@ -2158,15 +2340,20 @@ const params = new URLSearchParams(window.location.search);
         ideal.push({ d: new Date(d), v: idealRem });
       }
 
-      // actual: subtract hours of finished tasks by doneDate, else count when end date passes
+      // actual: bis heute auflösen, danach letzte bekannte Stelle halten (Linie endet heute)
       let actualRem = total;
       const actual = [];
       for (const d of days) {
         const dayStr = d.toISOString().slice(0,10);
+        if (d > today) {
+          // nach heute: Linie endet, kein weiterer Verlauf
+          actual.push({ d: new Date(d), v: actualRem });
+          continue;
+        }
         const completed = planCache
           .filter(p => p.status === 'Finished' && (
             (p.doneDate && p.doneDate.slice(0,10) <= dayStr) ||
-            (!p.doneDate && p.end <= d) // fallback: treat without doneDate as erledigt zum Enddatum
+            (!p.doneDate && p.end <= d)
           ))
           .reduce((s,p)=> s + (Number(p.hours)||0), 0);
         actualRem = Math.max(0, total - completed);
@@ -2181,14 +2368,35 @@ const params = new URLSearchParams(window.location.search);
       const toPoints = (arr) => arr.length ? arr.map((p,i)=> `${i*xStep},${scaleY(p.v)}`).join(' ') : `0,${height}`;
 
       const idealPoints = toPoints(ideal);
-      const actualPoints = toPoints(actual);
+      // Nach heute die Linie kappen: Punkte nach heute auf den Wert von heute setzen, aber kein sichtbarer Verlauf
+      const lastTodayIdx = days.findIndex(d => d.toDateString() === today.toDateString());
+      const cutoffIdx = lastTodayIdx === -1 ? days.findIndex(d => d > today) : lastTodayIdx + 1;
+      const actualPoints = (() => {
+        const slice = cutoffIdx > 0 ? actual.slice(0, cutoffIdx) : actual;
+        return slice.length ? slice.map((p,i)=> `${i*xStep},${scaleY(p.v)}`).join(' ') : `0,${height}`;
+      })();
 
       const xLabels = days.map((d,i)=> i%7===0 ? `<text x="${i*xStep}" y="${height+20}" fill="#94a3b8" font-size="12">${d.toLocaleDateString('de-CH')}</text>` : '').join('');
+      const msMarkers = milestones.map(ms => {
+        const msDate = new Date(ms.date);
+        const idx = days.findIndex(d => d.toDateString() === msDate.toDateString());
+        if (idx === -1) return '';
+        const x = idx * xStep;
+        const y = scaleY(actual[Math.min(idx, actual.length-1)]?.v ?? maxY);
+        return `
+          <g>
+            <line x1="${x}" x2="${x}" y1="0" y2="${height}" stroke="#f97316" stroke-dasharray="4 3" stroke-width="1" />
+            <text x="${x}" y="${y-6}" text-anchor="middle" fill="#f97316" font-size="12">◆</text>
+            <text x="${x}" y="${height+12}" text-anchor="middle" fill="#f97316" font-size="11">${ms.title || 'Milestone'}</text>
+          </g>
+        `;
+      }).join('');
 
       chartContainer.innerHTML = `
         <svg width="100%" viewBox="0 0 ${width} ${height+30}" preserveAspectRatio="xMinYMin slice">
           <polyline points="${idealPoints}" fill="none" stroke="${varAccent()}" stroke-width="2" stroke-dasharray="6 4" />
           <polyline points="${actualPoints}" fill="none" stroke="#f97316" stroke-width="3" />
+          ${msMarkers}
           ${xLabels}
         </svg>
         <div class="line-legend">

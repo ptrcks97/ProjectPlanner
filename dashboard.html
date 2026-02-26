@@ -74,6 +74,7 @@
           <button class="nav-btn active" id="tab-week" title="Wochentage"><span class="material-symbols-rounded">clock_loader_10</span></button>
           <button class="nav-btn" id="tab-start" title="Start & Dauer"><span class="material-symbols-rounded">calendar_clock</span></button>
           <button class="nav-btn" id="tab-phases" title="Phasen"><span class="material-symbols-rounded">format_list_numbered</span></button>
+          <button class="nav-btn" id="tab-milestones" title="Meilensteine"><span class="material-symbols-rounded">flag</span></button>
           <button class="nav-btn" id="tab-task" title="Aufgabe hinzufügen"><span class="material-symbols-rounded">add_task</span></button>
         </div>
 
@@ -124,6 +125,27 @@
           </form>
           <div id="phase-rows" style="display:flex; flex-direction:column; gap:8px;">
             <div>Lade Phasen...</div>
+          </div>
+        </div>
+
+        <div id="panel-milestones" class="hidden panel">
+          <h2 style="margin:4px 0 2px;">Meilensteine</h2>
+          <div class="muted" style="margin-bottom:8px;">Titel, Datum, Beschreibung (optional). Hat keinen Einfluss auf Berechnung.</div>
+          <form id="milestone-form">
+            <label>Titel
+              <input id="ms-title" type="text" required maxlength="160">
+            </label>
+            <label>Datum
+              <input id="ms-date" type="date" required>
+            </label>
+            <label>Beschreibung
+              <textarea id="ms-desc" rows="2"></textarea>
+            </label>
+            <input type="hidden" id="ms-id">
+            <button type="submit" class="btn-primary">Meilenstein speichern</button>
+          </form>
+          <div id="milestone-rows" style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+            <div class="muted">Keine Meilensteine.</div>
           </div>
         </div>
 
@@ -205,6 +227,7 @@
         <div id="week-avg" style="font-size:18px;font-weight:700;">-</div>
       </div>
     </div>
+    <div id="milestone-strip" class="muted" style="margin:6px 0 12px; display:flex; gap:8px; flex-wrap:wrap;"></div>
 
         <div id="controls-row" style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
           <div style="flex:1;"></div>
