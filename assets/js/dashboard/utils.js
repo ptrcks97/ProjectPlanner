@@ -3,8 +3,9 @@ export function fmt(date) {
 }
 
 export function statusChip(status) {
-  const key = (status || 'Backlog').toLowerCase();
+  const key = (status || 'Backlog').toLowerCase().replace(/\s+/g, '');
   const cls = key === 'todo' ? 'status-todo'
+    : key === 'inprogress' ? 'status-inprogress'
     : key === 'warten' ? 'status-warten'
     : key === 'onhold' ? 'status-onhold'
     : key === 'finished' ? 'status-finished'

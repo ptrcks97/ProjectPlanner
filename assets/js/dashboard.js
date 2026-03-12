@@ -1,5 +1,22 @@
 import { apiRequest } from './dashboard/api.js';
 import { fmt, isoWeek, startOfWeek, statusChip } from './dashboard/utils.js';
+import {
+  addFooter,
+  drawStatusBadge,
+  ensurePdfApi,
+  fmtDate,
+  measureStatusBadge,
+  renderBurndownPdf,
+  renderJournalTable,
+  renderPhaseGanttPdf,
+  renderPlanCoverPage,
+  renderPlanTableSection,
+  renderWorkPackageTable,
+  sectionTitlePage,
+  STATUS_STYLE,
+  enableNoBlankPagesGuard,
+  attachPageBackground
+} from './dashboard/pdf/index.js';
 
 const params = new URLSearchParams(window.location.search);
     const projectId = Number(params.get('id'));
@@ -34,6 +51,8 @@ const params = new URLSearchParams(window.location.search);
     const viewPlan = document.getElementById('view-plan');
     const viewPhase = document.getElementById('view-phase');
     const viewChart = document.getElementById('view-chart');
+    const planExportBtn = document.getElementById('plan-export-btn');
+    const reportExportBtn = document.getElementById('report-export-btn');
     const filterGroup = document.getElementById('filter-group');
     const phaseView = document.getElementById('phase-view');
     const chartView = document.getElementById('view-chart');
@@ -82,6 +101,7 @@ const params = new URLSearchParams(window.location.search);
     const JOURNAL_KEY_PREFIX = 'work-journal-project-';
     let journalEntries = [];
     let journalEditIndex = null;
+    let isReportGenerating = false;
 
     const modal = document.getElementById('task-modal');
     const modalTitle = document.getElementById('modal-title');
@@ -224,14 +244,16 @@ const params = new URLSearchParams(window.location.search);
     let weekly = null;
     let startStr = null;
     let planCache = [];
+    let projectData = null;
     let filterMode = 'all';
     let isRebalancingRecurring = false;
     let suppressRebalance = false;
 
-    const KANBAN_STATUSES = ['Backlog', 'ToDo', 'Warten', 'OnHold', 'Finished'];
+    const KANBAN_STATUSES = ['Backlog', 'ToDo', 'InProgress', 'Warten', 'OnHold', 'Finished'];
     const KANBAN_LABELS = {
       Backlog: 'Backlog',
       ToDo: 'To Do',
+      InProgress: 'In Progress',
       Warten: 'Warten',
       OnHold: 'On Hold',
       Finished: 'Finished'
@@ -239,6 +261,7 @@ const params = new URLSearchParams(window.location.search);
     const KANBAN_COLOR = {
       Backlog: '#64748b',
       ToDo: '#22d3ee',
+      InProgress: '#0ea5e9',
       Warten: '#f59e0b',
       OnHold: '#ef4444',
       Finished: '#22c55e'
@@ -330,10 +353,39 @@ const params = new URLSearchParams(window.location.search);
       status.classList.toggle('error', isError);
     }
 
+    /* ---------- Toast / UI helpers ---------- */
+    let toastTimer = null;
+    function showToast(message, variant = 'info') {
+      if (!message) return;
+      const existing = document.querySelector('.toast');
+      if (existing) existing.remove();
+      const toast = document.createElement('div');
+      toast.className = `toast${variant === 'error' ? ' error' : ''}`;
+      toast.innerHTML = `
+        <span style="flex:1;">${message}</span>
+        <button class="toast-close" aria-label="Schliessen">&times;</button>
+      `;
+      toast.querySelector('.toast-close')?.addEventListener('click', () => toast.remove());
+      document.body.appendChild(toast);
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.remove(), 4200);
+    }
+
+    function setReportLoading(on) {
+      isReportGenerating = !!on;
+      if (reportExportBtn) {
+        reportExportBtn.classList.toggle('loading', on);
+        reportExportBtn.disabled = on;
+        reportExportBtn.setAttribute('aria-busy', on ? 'true' : 'false');
+        reportExportBtn.title = on ? 'PDF wird erzeugt...' : 'Projektbericht als PDF herunterladen';
+      }
+    }
+
     async function loadProject() {
       const res = await apiRequest(`/projects/${projectId}`);
       if (!res.ok) throw new Error('Projekt nicht gefunden');
       const p = await res.json();
+      projectData = p;
       title.textContent = p.name;
     }
 
@@ -1608,7 +1660,8 @@ const params = new URLSearchParams(window.location.search);
     }
 
     function statusLabel(status) {
-      return KANBAN_LABELS[status] || status || 'Backlog';
+      const normalized = (status || '').replace(/\s+/g, '');
+      return KANBAN_LABELS[status] || KANBAN_LABELS[normalized] || status || 'Backlog';
     }
 
     function openDetailModal(pkg) {
@@ -1719,6 +1772,300 @@ const params = new URLSearchParams(window.location.search);
           </table>
         `;
       }).join('');
+    }
+
+    /* ---------- Plan PDF Export ---------- */
+
+    function planRowsSorted() {
+      return [...planCache].sort((a, b) => {
+        const sa = a.start ? a.start.getTime() : 0;
+        const sb = b.start ? b.start.getTime() : 0;
+        if (sa !== sb) return sa - sb;
+        const ea = a.end ? a.end.getTime() : 0;
+        const eb = b.end ? b.end.getTime() : 0;
+        if (ea !== eb) return ea - eb;
+        return (a.id ?? 0) - (b.id ?? 0);
+      });
+    }
+
+    function planRowFromEntry(entry, phaseRange = null) {
+      return {
+        phase: resolvePhaseName(entry.phaseId),
+        phaseRange,
+        name: entry.name,
+        status: statusLabel(entry.status || 'Backlog'),
+        statusRaw: entry.status || 'Backlog',
+        hours: Number(entry.hours || entry.time || 0).toFixed(1),
+        start: fmt(entry.start),
+        end: fmt(entry.end)
+      };
+    }
+
+    function phaseSnapshotRows() {
+      if (!planCache.length) return { rows: [], phases: [] };
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const map = new Map();
+      for (const p of planCache) {
+        const key = p.phaseId ?? 'none';
+        const current = map.get(key) || {
+          phaseId: p.phaseId,
+          name: resolvePhaseName(p.phaseId),
+          start: p.start,
+          end: p.end,
+          items: []
+        };
+        current.start = current.start && current.start < p.start ? current.start : p.start;
+        current.end = current.end && current.end > p.end ? current.end : p.end;
+        current.items.push(p);
+        map.set(key, current);
+      }
+      const allPhases = Array.from(map.values());
+      const past = allPhases.filter(ph => ph.end && ph.end < today).sort((a, b) => b.end - a.end);
+      const current = allPhases.find(ph => ph.start && ph.end && ph.start <= today && ph.end >= today);
+      const future = allPhases.filter(ph => ph.start && ph.start > today).sort((a, b) => a.start - b.start);
+
+      const selected = [];
+      if (past[0]) selected.push(past[0]);
+      if (current && !selected.includes(current)) selected.push(current);
+      if (future[0]) selected.push(future[0]);
+
+      const rows = [];
+      for (const ph of selected) {
+        const range = `${fmt(ph.start)} – ${fmt(ph.end)}`;
+        ph.items
+          .slice()
+          .sort((a, b) => (a.start - b.start) || (a.end - b.end) || ((a.id ?? 0) - (b.id ?? 0)))
+          .forEach(item => rows.push(planRowFromEntry(item, range)));
+      }
+      return { rows, phases: selected };
+    }
+
+    /* ---------- Projektbericht PDF (vollständiger Report) ---------- */
+
+    async function loadImageData(url) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+      } catch (err) {
+        console.warn('logo load failed', err);
+        return null;
+      }
+    }
+
+    function fileSafeName(name) {
+      return (name || 'projekt').replace(/[^a-z0-9-_]/gi, '_');
+    }
+
+   
+    function createJsPdf(options) {
+      const JsPDF = window.jspdf?.jsPDF || window.jsPDF;
+      if (!JsPDF) throw new Error('jsPDF nicht geladen');
+      const pdf = new JsPDF(options);
+      ensurePdfApi(pdf);
+      enableNoBlankPagesGuard(pdf);
+      attachPageBackground(pdf);
+      return pdf;
+    }
+
+    async function exportProjectReport() {
+      if (isReportGenerating) return;
+      setReportLoading(true);
+      try {
+        if (!planCache.length) {
+          await refreshPlan();
+          if (!planCache.length) throw new Error('Kein Plan berechnet.');
+        }
+        await document.fonts?.ready;
+        const pdf = createJsPdf({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+        ensurePdfApi(pdf);
+        const margin = 20;
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const today = new Date();
+        const logoData = await loadImageData('assets/logo/logo.png');
+        const projectName = projectData?.name || title?.textContent || 'Projekt';
+
+        // --- Titelblatt ---
+        pdf.setFillColor(238, 242, 255);
+        pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(28);
+        pdf.setTextColor(23, 37, 84);
+        if (logoData) {
+          const props = pdf.getImageProperties(logoData);
+          const ratio = Math.min(60 / props.width, 60 / props.height);
+          const w = props.width * ratio;
+          const h = props.height * ratio;
+          pdf.addImage(logoData, 'PNG', (pageWidth - w) / 2, margin + 4, w, h, undefined, 'FAST');
+        }
+        pdf.text('Projektbericht', pageWidth / 2, pageHeight / 2 - 6, { align: 'center' });
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(16);
+        pdf.text(projectName, pageWidth / 2, pageHeight / 2 + 10, { align: 'center' });
+        pdf.setFontSize(12);
+        pdf.setTextColor(90, 99, 116);
+        pdf.text(today.toLocaleDateString('de-CH'), pageWidth / 2, pageHeight / 2 + 22, { align: 'center' });
+        addFooter(pdf);
+
+        // Seite 2: Abschnittstitel Arbeitspakete
+        sectionTitlePage(pdf, 'Arbeitspakete');
+
+        // Seite 3 ff: Tabelle Arbeitspakete
+        const sortedRows = [...planCache].sort((a, b) => {
+          const af = a.start ? a.start.getTime() : 0;
+          const bf = b.start ? b.start.getTime() : 0;
+          if (af !== bf) return af - bf;
+          const at = a.end ? a.end.getTime() : 0;
+          const bt = b.end ? b.end.getTime() : 0;
+          if (at !== bt) return at - bt;
+          return (a.id ?? 0) - (b.id ?? 0);
+        }).map(p => ({
+          title: p.name,
+          phase: resolvePhaseName(p.phaseId),
+          status: statusLabel(p.status || 'Backlog'),
+          statusRaw: p.status || 'Backlog',
+          plannedTime: `${Number(p.hours || p.time || 0).toFixed(1)} h`,
+          from: fmtDate(p.start),
+          to: fmtDate(p.end)
+        }));
+        renderWorkPackageTable(pdf, sortedRows, margin);
+        addFooter(pdf);
+
+        // Abschnittstitel Projektphasen + Gantt
+        sectionTitlePage(pdf, 'Projektphasen');
+        const phaseRanges = phases.map(ph => {
+          const items = planCache.filter(p => p.phaseId === ph.id);
+          if (!items.length) return null;
+          const start = new Date(Math.min(...items.map(p => p.start)));
+          const end = new Date(Math.max(...items.map(p => p.end)));
+          return { name: ph.name, start, end, color: ph.color };
+        }).filter(Boolean);
+        if (phaseRanges.length) {
+          renderPhaseGanttPdf(pdf, phaseRanges);
+        } else {
+          pdf.addPage('a4', 'portrait');
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(14);
+          pdf.text('Keine Phasen gefunden.', margin, margin + 6);
+          addFooter(pdf);
+        }
+
+        // Abschnittstitel Projektstand + Burndown
+        sectionTitlePage(pdf, 'Projektstand');
+        renderBurndownPdf(pdf, planCache, milestones.filter(m => m.projectId === projectId), { startNewPage: true });
+
+        // Arbeitsjournal
+        sectionTitlePage(pdf, 'Arbeitsjournal');
+        const journalData = getSortedJournalEntries().map(({ entry }) => ({
+          date: entry.date ? fmtDate(entry.date) : '—',
+          person: entry.person || '—',
+          description: entry.description || entry.title || '—',
+          ref: entry.packageName || entry.phase || '—',
+          duration: entry.hours ? `${entry.hours} h` : '—'
+        }));
+        if (journalData.length) {
+          renderJournalTable(pdf, journalData);
+        } else {
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(14);
+          pdf.text('Arbeitsjournal', margin, margin);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(11);
+          pdf.text('Keine Journal-Einträge vorhanden.', margin, margin + 10);
+          addFooter(pdf);
+        }
+
+        // Leerseite mit Footer
+        pdf.addPage('a4', 'portrait');
+        addFooter(pdf);
+
+        const filename = `Projektbericht_${fileSafeName(projectName)}_${today.toISOString().slice(0,10)}.pdf`;
+        pdf.save(filename);
+        setStatus('Projektbericht exportiert.');
+      } catch (err) {
+        console.error(err);
+        showToast('Export fehlgeschlagen: ' + (err?.message || err), 'error');
+        setStatus('Export fehlgeschlagen.', true);
+      } finally {
+        setReportLoading(false);
+      }
+    }
+
+    async function loadPlanCoverImage() {
+      try {
+        const res = await fetch('assets/img/plan-cover.png');
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await blobToDataUrl(blob);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function exportPlanPdf() {
+      if (!planCache.length) { setStatus('Kein Plan vorhanden.', true); return; }
+      try {
+        setStatus('Erzeuge Plan-PDF...');
+        await document.fonts?.ready;
+
+        const coverData = await loadPlanCoverImage();
+        const pdf = createJsPdf({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+        ensurePdfApi(pdf);
+        renderPlanCoverPage(pdf, coverData, {
+          planCache,
+          projectTitle: projectData?.name || title?.textContent || 'Projekt',
+          projectId,
+          today: new Date()
+        });
+
+        const sortedPlan = planRowsSorted();
+        const allRows = sortedPlan.map(planRowFromEntry);
+        const { rows: snapshotRows, phases: snapPhases } = phaseSnapshotRows();
+        const doneRows = allRows.filter(r => (r.statusRaw || '').toLowerCase() === 'finished');
+        const today = new Date(); today.setHours(0,0,0,0);
+        const next7 = new Date(today); next7.setDate(next7.getDate() + 7);
+        const activeRows = sortedPlan
+          .filter(entry => {
+            const status = (entry.status || '').toLowerCase();
+            if (status === 'todo' || status === 'warten') return true;
+            if (status === 'backlog' && entry.start) {
+              return entry.start >= today && entry.start <= next7;
+            }
+            return false;
+          })
+          .map(planRowFromEntry);
+
+        const phaseSubtitle = snapPhases.length
+          ? snapPhases.map(ph => `${ph.name}: ${fmt(ph.start)} – ${fmt(ph.end)}`).join(' • ')
+          : 'Keine Phasen gefunden.';
+
+        const sections = [
+          { title: 'Gesamter Plan (nach Datum)', rows: allRows, emptyText: 'Keine Arbeitspakete gefunden.' },
+          { title: 'Letzte, aktuelle & fortführende Phase', subtitle: phaseSubtitle, rows: snapshotRows, emptyText: 'Keine passenden Phasen gefunden.' },
+          { title: 'Pakete erfüllt', rows: doneRows, emptyText: 'Noch keine Pakete abgeschlossen.' },
+          { title: 'Pakete in Arbeit', rows: activeRows, emptyText: 'Keine offenen Pakete.' }
+        ];
+
+        sections.forEach((section, idx) => {
+          pdf.addPage('a4', 'landscape');
+          renderPlanTableSection(pdf, { ...section, startY: 36 });
+        });
+
+        const ts = new Date().toISOString().slice(0, 10);
+        const filename = `plan-${projectId || 'projekt'}-${ts}.pdf`;
+        pdf.save(filename);
+        setStatus('PDF exportiert: ' + filename);
+      } catch (err) {
+        setStatus('Export fehlgeschlagen: ' + (err?.message || err), true);
+      }
     }
 
     /* ---------- Kanban ---------- */
@@ -2544,10 +2891,8 @@ async function exportChartAsPng() {
     document.documentElement.setAttribute('data-export', 'pdf');
     await document.fonts?.ready;
 
-    const { jsPDF } = window.jspdf || {};
-    if (!jsPDF) throw new Error('jsPDF nicht geladen');
-
-    const pdf = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    const pdf = createJsPdf({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    ensurePdfApi(pdf);
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     const margin = 24;
@@ -2826,6 +3171,8 @@ async function exportChartAsPng() {
 
     chartImageExportBtn?.addEventListener('click', exportChartAsPng);
 
+    planExportBtn?.addEventListener('click', exportPlanPdf);
+    reportExportBtn?.addEventListener('click', exportProjectReport);
 
     filterButtons.forEach(btn => {
       btn.addEventListener('click', () => {
