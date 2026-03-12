@@ -40,7 +40,7 @@ Standard-Port: http://localhost:3000 (änderbar via `PORT`, `DB_FILE`, `STATIC_D
 - Phasen & Arbeitspakete inkl. Kapazitäten, Auto-Scheduling, Filter (Heute/Woche/Monat/Alle)
 - Charts (Gantt, Phase-Gantt, Pie, Bar, Burndown) mit Fullscreen & PDF-Export aller Diagramme
 - Kanban-Board mit Drag & Drop
-- Arbeitsjournal pro Projekt (lokale Speicherung) mit CSV/MD/PDF-Export
+- Arbeitsjournal pro Projekt (Persistenz in `db.json`) mit CSV/MD/PDF-Export
 
 ## Hinweise
 - Keine Authentifizierung im Standardsetup.

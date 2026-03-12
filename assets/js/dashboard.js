@@ -98,9 +98,11 @@ const params = new URLSearchParams(window.location.search);
     const forecastCardDays = document.getElementById('forecast-days-total');
     const forecastCardEnd = document.getElementById('forecast-end-date');
     const forecastCardWeek = document.getElementById('forecast-week-avg');
-    const JOURNAL_KEY_PREFIX = 'work-journal-project-';
+    const JOURNAL_KEY_PREFIX = 'work-journal-project-'; // legacy localStorage prefix
+    const JOURNAL_ENDPOINT = '/journalEntries';
     let journalEntries = [];
-    let journalEditIndex = null;
+    let journalEditId = null;
+    let isJournalSaving = false;
     let isReportGenerating = false;
 
     const modal = document.getElementById('task-modal');
@@ -740,6 +742,52 @@ const params = new URLSearchParams(window.location.search);
       return `${JOURNAL_KEY_PREFIX}${projectId || 'unknown'}`;
     }
 
+    function normalizeJournalEntry(entry) {
+      if (!entry) return null;
+      const hoursNum = Number(entry.hours ?? 0);
+      return {
+        ...entry,
+        id: entry.id ?? entry._id, // fallback if json-server used different key
+        projectId: entry.projectId ?? projectId,
+        packageId: entry.packageId ?? entry.packageID ?? null,
+        packageName: entry.packageName ?? entry.package?.name ?? '',
+        hours: Number.isFinite(hoursNum) ? hoursNum : 0,
+        date: entry.date || '',
+        createdAt: entry.createdAt || entry.date || new Date().toISOString()
+      };
+    }
+
+    async function migrateLegacyJournalIfNeeded() {
+      const raw = localStorage.getItem(journalKey());
+      if (!raw) return;
+      let legacy;
+      try { legacy = JSON.parse(raw); } catch (err) { console.warn('legacy journal parse failed', err); return; }
+      if (!Array.isArray(legacy) || !legacy.length) return;
+
+      for (const entry of legacy) {
+        const payload = {
+          ...entry,
+          projectId,
+          packageId: entry.packageId ? Number(entry.packageId) : null,
+          hours: Number(entry.hours ?? 0) || 0,
+          createdAt: entry.createdAt || new Date().toISOString()
+        };
+        try {
+          const res = await apiRequest(JOURNAL_ENDPOINT, { method: 'POST', body: payload });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const saved = await res.json();
+          journalEntries.push(normalizeJournalEntry(saved));
+        } catch (err) {
+          console.error('legacy journal migrate failed', err);
+          setJournalStatus('Migration der alten Journal-Einträge ist fehlgeschlagen (' + err.message + ').', true);
+          return;
+        }
+      }
+
+      localStorage.removeItem(journalKey());
+      setJournalStatus('Lokale Journal-Einträge wurden migriert.', false);
+    }
+
     function renderJournalPhaseOptions() {
       if (!journalPhaseSelect) return;
       if (!phases.length) {
@@ -805,24 +853,32 @@ const params = new URLSearchParams(window.location.search);
       journalPackageSelect.innerHTML = '<option value="">(optional auswählen)</option>' + packages.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
     }
 
-    function loadJournal() {
-      const raw = localStorage.getItem(journalKey());
-      journalEntries = raw ? JSON.parse(raw) : [];
-      renderJournal();
-    }
-
-    function persistJournal() {
-      localStorage.setItem(journalKey(), JSON.stringify(journalEntries));
+    async function loadJournal() {
+      try {
+        setJournalStatus('Lade Arbeitsjournal...');
+        const arr = await fetchJsonWithRetry(`${JOURNAL_ENDPOINT}?projectId=${projectId}&_sort=date&_order=desc`);
+        journalEntries = Array.isArray(arr) ? arr.map(normalizeJournalEntry).filter(Boolean) : [];
+        if (!journalEntries.length) {
+          await migrateLegacyJournalIfNeeded();
+        }
+        renderJournal();
+        setJournalStatus('Arbeitsjournal bereit.');
+      } catch (err) {
+        setJournalStatus('Journal konnte nicht geladen werden (' + err.message + ').', true);
+      }
     }
 
     function getSortedJournalEntries() {
       return journalEntries
-        .map((entry, index) => ({ entry, index }))
+        .map((entry) => ({ entry }))
         .sort((a, b) => {
-          const da = Date.parse(a.entry?.date || '') || 0;
-          const db = Date.parse(b.entry?.date || '') || 0;
+          const da = Date.parse(a.entry?.date || a.entry?.createdAt || '') || 0;
+          const db = Date.parse(b.entry?.date || b.entry?.createdAt || '') || 0;
           if (db !== da) return db - da; // neueste Einträge zuerst
-          return a.index - b.index; // stabiler Fallback
+          const idA = Number(a.entry?.id ?? 0);
+          const idB = Number(b.entry?.id ?? 0);
+          if (idB !== idA) return idB - idA; // jüngere IDs zuerst
+          return 0;
         });
     }
 
@@ -836,20 +892,24 @@ const params = new URLSearchParams(window.location.search);
         return;
       }
       const sorted = getSortedJournalEntries();
-      journalRows.innerHTML = sorted.map(({ entry, index }) => `
+      journalRows.innerHTML = sorted.map(({ entry }, idx) => {
+        const entryId = entry.id ?? idx;
+        const hours = Number(entry.hours || 0);
+        return `
         <tr>
           <td>${entry.title}</td>
           <td>${entry.description}</td>
           <td><span class="chip">${entry.phase || '-'}</span></td>
           <td>${entry.packageName || '-'}</td>
-          <td>${entry.hours}</td>
+          <td>${hours.toFixed(2)}</td>
           <td>${entry.date}</td>
           <td>
-            <button class="ghost" data-edit-journal="${index}">Bearbeiten</button>
-            <button class="ghost" data-remove="${index}" style="margin-left:6px;">Löschen</button>
+            <button class="ghost" data-edit-id="${entryId}">Bearbeiten</button>
+            <button class="ghost" data-remove-id="${entryId}" style="margin-left:6px;">Löschen</button>
           </td>
         </tr>
-      `).join('');
+        `;
+      }).join('');
       journalCount.textContent = journalEntries.length;
       const total = journalEntries.reduce((sum, e) => sum + Number(e.hours || 0), 0);
       journalTotal.textContent = `${total.toFixed(2)} h`;
@@ -1314,7 +1374,7 @@ const params = new URLSearchParams(window.location.search);
       try {
         await loadProject();
         await refreshPlan();
-        initJournal();
+        await initJournal();
         const desiredView = params.get('view') || window.location.hash.replace('#', '');
         if (desiredView === 'journal') setTopView('journal');
         else if (desiredView === 'kanban') setTopView('kanban');
@@ -3336,71 +3396,123 @@ async function exportChartAsPng() {
       }
     });
 
-    journalForm?.addEventListener('submit', (evt) => {
+    journalForm?.addEventListener('submit', async (evt) => {
       evt.preventDefault();
+      if (isJournalSaving) return;
+
       const title = document.getElementById('journal-title').value.trim();
       const description = document.getElementById('journal-description').value.trim();
       const phase = journalPhaseSelect?.value || '';
-      const packageId = journalPackageSelect?.value || '';
-      const packageName = packageId ? (packages.find(p => String(p.id) === packageId)?.name || '-') : '';
-      const hours = Number(document.getElementById('journal-hours').value);
+      const packageIdVal = journalPackageSelect?.value || '';
+      const packageId = packageIdVal ? Number(packageIdVal) : null;
+      const packageName = packageId ? (packages.find(p => Number(p.id) === packageId)?.name || '-') : '';
+      const hoursRaw = Number(document.getElementById('journal-hours').value);
       const date = journalDate?.value || new Date().toISOString().split('T')[0];
 
       if (!title || !description) {
         setJournalStatus('Bitte Titel und Beschreibung ausfüllen.', true);
         return;
       }
-      if (Number.isNaN(hours)) {
+      if (Number.isNaN(hoursRaw)) {
         setJournalStatus('Bitte eine Stundenanzahl angeben.', true);
         return;
       }
 
-      const entry = { title, description, phase, packageId, packageName, hours: hours.toFixed(2), date };
-      if (journalEditIndex !== null) {
-        journalEntries[journalEditIndex] = entry;
-        setJournalStatus('Eintrag aktualisiert.');
+      const hours = Number(hoursRaw.toFixed(2));
+      const basePayload = {
+        projectId,
+        title,
+        description,
+        phase,
+        packageId,
+        packageName,
+        hours,
+        date
+      };
+
+      const existing = journalEditId ? journalEntries.find(e => e.id === journalEditId) : null;
+      if (existing?.createdAt) {
+        basePayload.createdAt = existing.createdAt;
       } else {
-        journalEntries.unshift(entry);
-        setJournalStatus('Eintrag gespeichert.');
+        basePayload.createdAt = new Date().toISOString();
       }
-      persistJournal();
-      renderJournal();
-      resetJournalForm();
+
+      try {
+        isJournalSaving = true;
+        if (journalSubmitBtn) {
+          journalSubmitBtn.disabled = true;
+          journalSubmitBtn.classList.add('loading');
+        }
+        setJournalStatus(journalEditId ? 'Aktualisiere Eintrag...' : 'Speichere Eintrag...');
+
+        const res = await apiRequest(journalEditId ? `${JOURNAL_ENDPOINT}/${journalEditId}` : JOURNAL_ENDPOINT, {
+          method: journalEditId ? 'PUT' : 'POST',
+          body: journalEditId ? { ...basePayload, id: journalEditId } : basePayload
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const saved = normalizeJournalEntry(await res.json());
+
+        if (journalEditId) {
+          const idx = journalEntries.findIndex(e => e.id === journalEditId);
+          if (idx >= 0) journalEntries[idx] = saved; else journalEntries.unshift(saved);
+          setJournalStatus('Eintrag aktualisiert.');
+        } else {
+          journalEntries.unshift(saved);
+          setJournalStatus('Eintrag gespeichert.');
+        }
+        renderJournal();
+        resetJournalForm();
+      } catch (err) {
+        setJournalStatus('Eintrag konnte nicht gespeichert werden (' + err.message + ').', true);
+      } finally {
+        isJournalSaving = false;
+        if (journalSubmitBtn) {
+          journalSubmitBtn.disabled = false;
+          journalSubmitBtn.classList.remove('loading');
+        }
+      }
     });
 
-    journalRows?.addEventListener('click', (evt) => {
-      const btn = evt.target.closest('[data-remove]');
-      const editBtn = evt.target.closest('[data-edit-journal]');
+    journalRows?.addEventListener('click', async (evt) => {
+      const btn = evt.target.closest('[data-remove-id]');
+      const editBtn = evt.target.closest('[data-edit-id]');
       if (btn) {
-        const index = Number(btn.dataset.remove);
-        journalEntries.splice(index, 1);
-        persistJournal();
-        renderJournal();
-        setJournalStatus('Eintrag gelöscht.');
-        if (journalEditIndex === index) resetJournalForm();
+        const id = Number(btn.dataset.removeId);
+        if (Number.isNaN(id)) return;
+        try {
+          const res = await apiRequest(`${JOURNAL_ENDPOINT}/${id}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          journalEntries = journalEntries.filter(e => e.id !== id);
+          renderJournal();
+          setJournalStatus('Eintrag gelöscht.');
+          if (journalEditId === id) resetJournalForm();
+        } catch (err) {
+          setJournalStatus('Eintrag konnte nicht gelöscht werden (' + err.message + ').', true);
+        }
         return;
       }
       if (editBtn) {
-        const index = Number(editBtn.dataset.editJournal);
-        startJournalEdit(index);
+        const id = Number(editBtn.dataset.editId);
+        if (Number.isNaN(id)) return;
+        startJournalEdit(id);
       }
     });
 
-    function initJournal() {
+    async function initJournal() {
       setJournalToday();
       renderJournalPhaseOptions();
-      loadJournal();
+      await loadJournal();
     }
 
-    function startJournalEdit(index) {
-      const entry = journalEntries[index];
+    function startJournalEdit(id) {
+      const entry = journalEntries.find(e => e.id === id);
       if (!entry) return;
-      journalEditIndex = index;
+      journalEditId = id;
       document.getElementById('journal-title').value = entry.title;
       document.getElementById('journal-description').value = entry.description;
       if (journalPhaseSelect) journalPhaseSelect.value = entry.phase || '';
-      if (journalPackageSelect) journalPackageSelect.value = entry.packageId || '';
-      document.getElementById('journal-hours').value = entry.hours;
+      if (journalPackageSelect) journalPackageSelect.value = entry.packageId ? String(entry.packageId) : '';
+      document.getElementById('journal-hours').value = Number(entry.hours || 0);
       if (journalDate) journalDate.value = entry.date;
       if (journalSubmitBtn) journalSubmitBtn.textContent = 'Änderungen speichern';
       if (journalCancelBtn) journalCancelBtn.style.display = 'inline-block';
@@ -3408,7 +3520,7 @@ async function exportChartAsPng() {
     }
 
     function resetJournalForm() {
-      journalEditIndex = null;
+      journalEditId = null;
       journalForm.reset();
       setJournalToday();
       if (journalSubmitBtn) journalSubmitBtn.textContent = 'Eintrag speichern';
